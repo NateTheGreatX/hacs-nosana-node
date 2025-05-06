@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import re
 from datetime import timedelta
 import logging
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -27,38 +28,50 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self):
-        """Fetch data from both Nosana APIs."""
+        """Fetch data from Nosana APIs."""
         try:
             address = self.config_entry.data[CONF_SOLANA_ADDRESS]
+            specs_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{address}/specs"
             node_info_url = f"https://{address}.node.k8s.prd.nos.ci/node/info"
             benchmark_url = f"https://dashboard.k8s.prd.nos.ci/api/benchmarks/generic-benchmark-data?node={address}"
 
             async with aiohttp.ClientSession() as session:
-                # Fetch node info
+                # Fetch all endpoints concurrently
+                specs_task = session.get(specs_url)
                 node_info_task = session.get(node_info_url)
                 benchmark_task = session.get(benchmark_url)
 
-                # Execute both requests concurrently
-                node_info_response, benchmark_response = await asyncio.gather(
+                specs_response, node_info_response, benchmark_response = await asyncio.gather(
+                    specs_task,
                     node_info_task,
                     benchmark_task,
                     return_exceptions=True
                 )
 
-                # Process node info response
-                node_info_data = {}
-                if isinstance(node_info_response, aiohttp.ClientResponse):
-                    node_info_response.raise_for_status()
-                    node_info_data = await node_info_response.json()
+                # Process specs response (primary)
+                specs_data = {}
+                if isinstance(specs_response, aiohttp.ClientResponse):
+                    specs_response.raise_for_status()
+                    specs_data = await specs_response.json()
                 else:
-                    _LOGGER.warning("Failed to fetch node info data")
+                    _LOGGER.warning("Failed to fetch specs data")
+
+                # Process node info response (for state)
+                node_info_data = {"state": "offline"}  # Default to offline
+                if isinstance(node_info_response, aiohttp.ClientResponse):
+                    try:
+                        node_info_response.raise_for_status()
+                        node_info_data = await node_info_response.json()
+                    except aiohttp.ClientError:
+                        _LOGGER.warning("Node info API failed, setting state to offline")
+                else:
+                    _LOGGER.warning("Node info API unavailable, state set to offline")
 
                 # Process benchmark response
                 benchmark_data = {}
                 if isinstance(benchmark_response, aiohttp.ClientResponse):
                     benchmark_response.raise_for_status()
                     benchmark_response_data = await benchmark_response.json()
-                    # Extract first item from data array (if available)
                     benchmark_data = benchmark_response_data.get("data", [{}])[0] if benchmark_response_data.get(
                         "data") else {}
                 else:
@@ -66,6 +79,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
 
                 # Combine data
                 return {
+                    "specs": specs_data,
                     "node_info": node_info_data,
                     "benchmark": benchmark_data
                 }

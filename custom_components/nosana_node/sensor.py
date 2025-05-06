@@ -1,28 +1,71 @@
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.const import PERCENTAGE, UnitOfInformation
+from homeassistant.const import UnitOfInformation
 from .const import DOMAIN, CONF_SOLANA_ADDRESS
 
 SENSOR_TYPES = [
-    # Existing sensors (node info API)
+    # Sensors from /specs (primary)
     SensorEntityDescription(
-        key="uptime",
-        name="Node Uptime",
-        state_class="measurement",
-    ),
-    SensorEntityDescription(
-        key="state",
-        name="Node State",
-        state_class="measurement",
-    ),
-    SensorEntityDescription(
-        key="version",
-        name="Node Version",
+        key="status",
+        name="Node Status",
         state_class="measurement",
     ),
     SensorEntityDescription(
         key="country",
         name="Node Country",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="ram_mb",
+        name="RAM Size",
+        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="disk_space_gb",
+        name="Disk Space",
+        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="cpu",
+        name="CPU Model",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="logical_cores",
+        name="CPU Logical Cores",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="physical_cores",
+        name="CPU Physical Cores",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="node_version",
+        name="Node Version",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="system_environment",
+        name="System Environment",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="memory_gpu_mb",
+        name="GPU Memory Total",
+        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="cuda_version",
+        name="CUDA Version",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="nvml_version",
+        name="NVML Version",
         state_class="measurement",
     ),
     SensorEntityDescription(
@@ -44,34 +87,32 @@ SENSOR_TYPES = [
         state_class="measurement",
     ),
     SensorEntityDescription(
-        key="disk_gb",
-        name="Disk Size",
-        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        key="gpu_name",
+        name="GPU Name",
         state_class="measurement",
     ),
     SensorEntityDescription(
-        key="ram_mb",
-        name="RAM Size",
-        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
+        key="market_address",
+        name="Market Address",
         state_class="measurement",
     ),
     SensorEntityDescription(
-        key="cpu_logical_cores",
-        name="CPU Logical Cores",
+        key="major_version_gpu",
+        name="GPU Major Version",
         state_class="measurement",
     ),
     SensorEntityDescription(
-        key="gpu_memory_total_mb",
-        name="GPU Memory Total",
-        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
+        key="minor_version_gpu",
+        name="GPU Minor Version",
         state_class="measurement",
     ),
+    # Sensor from /node/info
     SensorEntityDescription(
-        key="cuda_driver_version",
-        name="CUDA Driver Version",
+        key="state",
+        name="Node State",
         state_class="measurement",
     ),
-    # New sensors (benchmark API)
+    # Sensors from /benchmarks
     SensorEntityDescription(
         key="storage_to_cpu_bandwidth_mbps",
         name="Storage to CPU Bandwidth",
@@ -138,42 +179,61 @@ class NosanaNodeSensor(SensorEntity):
     @property
     def native_value(self):
         """Return the sensor value."""
-        # Node info data
+        # Specs data (primary)
+        specs = self.coordinator.data.get("specs", {}) if self.coordinator.data else {}
+        bandwidth = specs.get("bandwidth", {})
+        gpus = specs.get("gpus", [{}])[0]
+
+        # Node info data (for state)
         node_info = self.coordinator.data.get("node_info", {}) if self.coordinator.data else {}
-        node_info_data = node_info.get("info", {})
-        network = node_info_data.get("network", {})
-        gpus = node_info_data.get("gpus", {}).get("devices", [{}])[0]
 
         # Benchmark data
         benchmark = self.coordinator.data.get("benchmark", {}) if self.coordinator.data else {}
         metrics = benchmark.get("metrics", {})
 
-        # Existing sensors (node info)
-        if self.entity_description.key == "uptime":
-            return node_info.get("uptime")
-        elif self.entity_description.key == "state":
-            return node_info.get("state")
-        elif self.entity_description.key == "version":
-            return node_info_data.get("version")
+        # Sensors from /specs
+        if self.entity_description.key == "status":
+            return specs.get("status")
         elif self.entity_description.key == "country":
-            return node_info_data.get("country")
-        elif self.entity_description.key == "ping_ms":
-            return network.get("ping_ms")
-        elif self.entity_description.key == "download_mbps":
-            return network.get("download_mbps")
-        elif self.entity_description.key == "upload_mbps":
-            return network.get("upload_mbps")
-        elif self.entity_description.key == "disk_gb":
-            return node_info_data.get("disk_gb")
+            return specs.get("country")
         elif self.entity_description.key == "ram_mb":
-            return node_info_data.get("ram_mb")
-        elif self.entity_description.key == "cpu_logical_cores":
-            return node_info_data.get("cpu", {}).get("logical_cores")
-        elif self.entity_description.key == "gpu_memory_total_mb":
-            return gpus.get("memory", {}).get("total_mb")
-        elif self.entity_description.key == "cuda_driver_version":
-            return node_info_data.get("gpus", {}).get("cuda_driver_version")
-        # New sensors (benchmark)
+            return specs.get("ram")
+        elif self.entity_description.key == "disk_space_gb":
+            return specs.get("diskSpace")
+        elif self.entity_description.key == "cpu":
+            return specs.get("cpu")
+        elif self.entity_description.key == "logical_cores":
+            return specs.get("logicalCores")
+        elif self.entity_description.key == "physical_cores":
+            return specs.get("physicalCores")
+        elif self.entity_description.key == "node_version":
+            return specs.get("nodeVersion")
+        elif self.entity_description.key == "system_environment":
+            return specs.get("systemEnvironment")
+        elif self.entity_description.key == "memory_gpu_mb":
+            return specs.get("memoryGPU")
+        elif self.entity_description.key == "cuda_version":
+            return specs.get("cudaVersion")
+        elif self.entity_description.key == "nvml_version":
+            return specs.get("nvmlVersion")
+        elif self.entity_description.key == "ping_ms":
+            return bandwidth.get("ping")
+        elif self.entity_description.key == "download_mbps":
+            return bandwidth.get("download")
+        elif self.entity_description.key == "upload_mbps":
+            return bandwidth.get("upload")
+        elif self.entity_description.key == "gpu_name":
+            return gpus.get("gpu")
+        elif self.entity_description.key == "market_address":
+            return specs.get("marketAddress")
+        elif self.entity_description.key == "major_version_gpu":
+            return specs.get("majorVersionGPU")
+        elif self.entity_description.key == "minor_version_gpu":
+            return specs.get("minorVersionGPU")
+        # Sensor from /node/info
+        elif self.entity_description.key == "state":
+            return node_info.get("state", "offline")
+        # Sensors from /benchmarks
         elif self.entity_description.key == "storage_to_cpu_bandwidth_mbps":
             return metrics.get("storageToCpuBandwidthMbps")
         elif self.entity_description.key == "cpu_to_gpu_bandwidth_mbps":
@@ -191,20 +251,17 @@ class NosanaNodeSensor(SensorEntity):
     @property
     def extra_state_attributes(self):
         """Return additional attributes."""
+        specs = self.coordinator.data.get("specs", {}) if self.coordinator.data else {}
         node_info = self.coordinator.data.get("node_info", {}) if self.coordinator.data else {}
-        node_info_data = node_info.get("info", {})
-        gpus = node_info_data.get("gpus", {}).get("devices", [{}])[0]
         benchmark = self.coordinator.data.get("benchmark", {}) if self.coordinator.data else {}
         attributes = {}
 
-        if self.entity_description.key == "uptime":
-            attributes["node_address"] = node_info.get("node")
-        elif self.entity_description.key == "cpu_logical_cores":
-            attributes["cpu_model"] = node_info_data.get("cpu", {}).get("model")
-            attributes["physical_cores"] = node_info_data.get("cpu", {}).get("physical_cores")
-        elif self.entity_description.key == "gpu_memory_total_mb":
-            attributes["gpu_name"] = gpus.get("name")
-            attributes["gpu_uuid"] = gpus.get("uuid")
+        if self.entity_description.key == "state":
+            attributes["node_address"] = specs.get("nodeAddress")
+        elif self.entity_description.key == "logical_cores" or self.entity_description.key == "physical_cores":
+            attributes["cpu_model"] = specs.get("cpu")
+        elif self.entity_description.key == "memory_gpu_mb":
+            attributes["gpu_name"] = specs.get("gpus", [{}])[0].get("gpu")
         elif self.entity_description.key in [
             "storage_to_cpu_bandwidth_mbps",
             "cpu_to_gpu_bandwidth_mbps",

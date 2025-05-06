@@ -1,7 +1,10 @@
 # Changelog
 
 ## 0.1.3
+- Added new primary endpoint `https://dashboard.k8s.prd.nos.ci/api/nodes/<solana_address>/specs` for node specifications.
+- Set `state` to `"offline"` if `/node/info` endpoint fails.
 - Fixed `ImportError` for `DATA_GIGABYTES` and `DATA_MEGABYTES` by using `UnitOfInformation.GIGABYTES` and `UnitOfInformation.MEGABYTES`.
+- Fixed `NameError` in `coordinator.py` by adding `import re` for Solana address validation.
 - Added sensors for benchmark metrics from `https://dashboard.k8s.prd.nos.ci/api/benchmarks/generic-benchmark-data`:
   - Storage to CPU Bandwidth
   - CPU to GPU Bandwidth
@@ -9,6 +12,26 @@
   - RAM Read/Write Speed
   - Internet Download Speed
   - Internet Upload Speed
+- Added sensors from `/specs` endpoint:
+  - Node Status
+  - Node Country
+  - RAM Size
+  - Disk Space
+  - CPU Model
+  - CPU Logical Cores
+  - CPU Physical Cores
+  - Node Version
+  - System Environment
+  - GPU Memory Total
+  - CUDA Version
+  - NVML Version
+  - Network Ping
+  - Download Speed
+  - Upload Speed
+  - GPU Name
+  - Market Address
+  - GPU Major Version
+  - GPU Minor Version
 
 ## 0.1.2
 - Fixed missing `async_setup_entry` in `__init__.py` causing setup failure.
