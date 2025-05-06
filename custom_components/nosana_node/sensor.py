@@ -1,9 +1,10 @@
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.const import DATA_GIGABYTES, DATA_MEGABYTES, PERCENTAGE, UnitOfInformation
-from .const import DOMAIN
+from homeassistant.const import PERCENTAGE, UnitOfInformation
+from .const import DOMAIN, CONF_SOLANA_ADDRESS
 
 SENSOR_TYPES = [
+    # Existing sensors (node info API)
     SensorEntityDescription(
         key="uptime",
         name="Node Uptime",
@@ -45,13 +46,13 @@ SENSOR_TYPES = [
     SensorEntityDescription(
         key="disk_gb",
         name="Disk Size",
-        native_unit_of_measurement=DATA_GIGABYTES,
+        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
         state_class="measurement",
     ),
     SensorEntityDescription(
         key="ram_mb",
         name="RAM Size",
-        native_unit_of_measurement=DATA_MEGABYTES,
+        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
         state_class="measurement",
     ),
     SensorEntityDescription(
@@ -62,7 +63,7 @@ SENSOR_TYPES = [
     SensorEntityDescription(
         key="gpu_memory_total_mb",
         name="GPU Memory Total",
-        native_unit_of_measurement=DATA_MEGABYTES,
+        native_unit_of_measurement=UnitOfInformation.MEGABYTES,
         state_class="measurement",
     ),
     SensorEntityDescription(
@@ -70,8 +71,44 @@ SENSOR_TYPES = [
         name="CUDA Driver Version",
         state_class="measurement",
     ),
+    # New sensors (benchmark API)
+    SensorEntityDescription(
+        key="storage_to_cpu_bandwidth_mbps",
+        name="Storage to CPU Bandwidth",
+        native_unit_of_measurement="Mbps",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="cpu_to_gpu_bandwidth_mbps",
+        name="CPU to GPU Bandwidth",
+        native_unit_of_measurement="Mbps",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="system_read_write_speed",
+        name="System Read/Write Speed",
+        native_unit_of_measurement="MB/s",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="ram_read_write_speed",
+        name="RAM Read/Write Speed",
+        native_unit_of_measurement="MB/s",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="internet_speed_download",
+        name="Internet Download Speed",
+        native_unit_of_measurement="Mbps",
+        state_class="measurement",
+    ),
+    SensorEntityDescription(
+        key="internet_speed_upload",
+        name="Internet Upload Speed",
+        native_unit_of_measurement="Mbps",
+        state_class="measurement",
+    ),
 ]
-
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
@@ -81,7 +118,6 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         for description in SENSOR_TYPES
     ]
     async_add_entities(entities)
-
 
 class NosanaNodeSensor(SensorEntity):
     """Representation of a Nosana Node sensor."""
@@ -102,18 +138,25 @@ class NosanaNodeSensor(SensorEntity):
     @property
     def native_value(self):
         """Return the sensor value."""
-        data = self.coordinator.data.get("info", {})
-        network = data.get("network", {})
-        gpus = data.get("gpus", {}).get("devices", [{}])[0]
+        # Node info data
+        node_info = self.coordinator.data.get("node_info", {}) if self.coordinator.data else {}
+        node_info_data = node_info.get("info", {})
+        network = node_info_data.get("network", {})
+        gpus = node_info_data.get("gpus", {}).get("devices", [{}])[0]
 
+        # Benchmark data
+        benchmark = self.coordinator.data.get("benchmark", {}) if self.coordinator.data else {}
+        metrics = benchmark.get("metrics", {})
+
+        # Existing sensors (node info)
         if self.entity_description.key == "uptime":
-            return self.coordinator.data.get("uptime")
+            return node_info.get("uptime")
         elif self.entity_description.key == "state":
-            return self.coordinator.data.get("state")
+            return node_info.get("state")
         elif self.entity_description.key == "version":
-            return data.get("version")
+            return node_info_data.get("version")
         elif self.entity_description.key == "country":
-            return data.get("country")
+            return node_info_data.get("country")
         elif self.entity_description.key == "ping_ms":
             return network.get("ping_ms")
         elif self.entity_description.key == "download_mbps":
@@ -121,32 +164,57 @@ class NosanaNodeSensor(SensorEntity):
         elif self.entity_description.key == "upload_mbps":
             return network.get("upload_mbps")
         elif self.entity_description.key == "disk_gb":
-            return data.get("disk_gb")
+            return node_info_data.get("disk_gb")
         elif self.entity_description.key == "ram_mb":
-            return data.get("ram_mb")
+            return node_info_data.get("ram_mb")
         elif self.entity_description.key == "cpu_logical_cores":
-            return data.get("cpu", {}).get("logical_cores")
+            return node_info_data.get("cpu", {}).get("logical_cores")
         elif self.entity_description.key == "gpu_memory_total_mb":
             return gpus.get("memory", {}).get("total_mb")
         elif self.entity_description.key == "cuda_driver_version":
-            return data.get("gpus", {}).get("cuda_driver_version")
+            return node_info_data.get("gpus", {}).get("cuda_driver_version")
+        # New sensors (benchmark)
+        elif self.entity_description.key == "storage_to_cpu_bandwidth_mbps":
+            return metrics.get("storageToCpuBandwidthMbps")
+        elif self.entity_description.key == "cpu_to_gpu_bandwidth_mbps":
+            return metrics.get("cpuToGpuBandwidthMbps")
+        elif self.entity_description.key == "system_read_write_speed":
+            return metrics.get("systemReadWriteSpeed")
+        elif self.entity_description.key == "ram_read_write_speed":
+            return metrics.get("ramReadWriteSpeed")
+        elif self.entity_description.key == "internet_speed_download":
+            return metrics.get("internetSpeedDownload")
+        elif self.entity_description.key == "internet_speed_upload":
+            return metrics.get("internetSpeedUpload")
         return None
 
     @property
     def extra_state_attributes(self):
         """Return additional attributes."""
-        data = self.coordinator.data.get("info", {})
-        gpus = data.get("gpus", {}).get("devices", [{}])[0]
+        node_info = self.coordinator.data.get("node_info", {}) if self.coordinator.data else {}
+        node_info_data = node_info.get("info", {})
+        gpus = node_info_data.get("gpus", {}).get("devices", [{}])[0]
+        benchmark = self.coordinator.data.get("benchmark", {}) if self.coordinator.data else {}
         attributes = {}
 
         if self.entity_description.key == "uptime":
-            attributes["node_address"] = self.coordinator.data.get("node")
+            attributes["node_address"] = node_info.get("node")
         elif self.entity_description.key == "cpu_logical_cores":
-            attributes["cpu_model"] = data.get("cpu", {}).get("model")
-            attributes["physical_cores"] = data.get("cpu", {}).get("physical_cores")
+            attributes["cpu_model"] = node_info_data.get("cpu", {}).get("model")
+            attributes["physical_cores"] = node_info_data.get("cpu", {}).get("physical_cores")
         elif self.entity_description.key == "gpu_memory_total_mb":
             attributes["gpu_name"] = gpus.get("name")
             attributes["gpu_uuid"] = gpus.get("uuid")
+        elif self.entity_description.key in [
+            "storage_to_cpu_bandwidth_mbps",
+            "cpu_to_gpu_bandwidth_mbps",
+            "system_read_write_speed",
+            "ram_read_write_speed",
+            "internet_speed_download",
+            "internet_speed_upload"
+        ]:
+            attributes["bench_version"] = benchmark.get("benchVersion")
+            attributes["gpu_address"] = benchmark.get("gpu")
         return attributes
 
     @property
