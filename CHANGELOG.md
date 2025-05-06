@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.4
+- Fixed `ValueError` for non-numeric sensors by removing `state_class="measurement"` for `status`, `system_environment`, `nvml_version`, `gpu_name`, `market_address`, and `state`.
+
 ## 0.1.3
 - Added new primary endpoint `https://dashboard.k8s.prd.nos.ci/api/nodes/<solana_address>/specs` for node specifications.
 - Set `state` to `"offline"` if `/node/info` endpoint fails.

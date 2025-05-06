@@ -8,146 +8,146 @@ SENSOR_TYPES = [
     SensorEntityDescription(
         key="status",
         name="Node Status",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "PREMIUM")
     ),
     SensorEntityDescription(
         key="country",
         name="Node Country",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "US")
     ),
     SensorEntityDescription(
         key="ram_mb",
         name="RAM Size",
         native_unit_of_measurement=UnitOfInformation.MEGABYTES,
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="disk_space_gb",
         name="Disk Space",
         native_unit_of_measurement=UnitOfInformation.GIGABYTES,
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="cpu",
         name="CPU Model",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "Intel(R) Core(TM) i5-3470")
     ),
     SensorEntityDescription(
         key="logical_cores",
         name="CPU Logical Cores",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="physical_cores",
         name="CPU Physical Cores",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="node_version",
         name="Node Version",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "1.0.37")
     ),
     SensorEntityDescription(
         key="system_environment",
         name="System Environment",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "5.4.0-215-generic")
     ),
     SensorEntityDescription(
         key="memory_gpu_mb",
         name="GPU Memory Total",
         native_unit_of_measurement=UnitOfInformation.MEGABYTES,
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="cuda_version",
         name="CUDA Version",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "12.9")
     ),
     SensorEntityDescription(
         key="nvml_version",
         name="NVML Version",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "575.51.02")
     ),
     SensorEntityDescription(
         key="ping_ms",
         name="Network Ping",
         native_unit_of_measurement="ms",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="download_mbps",
         name="Download Speed",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="upload_mbps",
         name="Upload Speed",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="gpu_name",
         name="GPU Name",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "NVIDIA GeForce RTX 5080")
     ),
     SensorEntityDescription(
         key="market_address",
         name="Market Address",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (Solana address)
     ),
     SensorEntityDescription(
         key="major_version_gpu",
         name="GPU Major Version",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="minor_version_gpu",
         name="GPU Minor Version",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     # Sensor from /node/info
     SensorEntityDescription(
         key="state",
         name="Node State",
-        state_class="measurement",
+        state_class=None,  # Non-numeric (e.g., "offline", "OTHER")
     ),
     # Sensors from /benchmarks
     SensorEntityDescription(
         key="storage_to_cpu_bandwidth_mbps",
         name="Storage to CPU Bandwidth",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="cpu_to_gpu_bandwidth_mbps",
         name="CPU to GPU Bandwidth",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="system_read_write_speed",
         name="System Read/Write Speed",
         native_unit_of_measurement="MB/s",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="ram_read_write_speed",
         name="RAM Read/Write Speed",
         native_unit_of_measurement="MB/s",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="internet_speed_download",
         name="Internet Download Speed",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
     SensorEntityDescription(
         key="internet_speed_upload",
         name="Internet Upload Speed",
         native_unit_of_measurement="Mbps",
-        state_class="measurement",
+        state_class="measurement",  # Numeric
     ),
 ]
 
@@ -174,6 +174,7 @@ class NosanaNodeSensor(SensorEntity):
             name=f"Nosana Node {config_entry.data[CONF_SOLANA_ADDRESS][:8]}",
             manufacturer="Nosana",
             model="Node",
+            configuration_url="https://dashboard.k8s.prd.nos.ci",
         )
 
     @property
@@ -258,7 +259,7 @@ class NosanaNodeSensor(SensorEntity):
 
         if self.entity_description.key == "state":
             attributes["node_address"] = specs.get("nodeAddress")
-        elif self.entity_description.key == "logical_cores" or self.entity_description.key == "physical_cores":
+        elif self.entity_description.key in ["logical_cores", "physical_cores"]:
             attributes["cpu_model"] = specs.get("cpu")
         elif self.entity_description.key == "memory_gpu_mb":
             attributes["gpu_name"] = specs.get("gpus", [{}])[0].get("gpu")
