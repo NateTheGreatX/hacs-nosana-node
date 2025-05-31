@@ -1,51 +1,68 @@
-# Nosana Node Integration
+# Nosana Node Home Assistant Integration
 
-A Home Assistant integration to monitor Nosana nodes using a Solana address.
+This integration allows you to monitor the status of a Nosana node in Home Assistant. It creates a sensor entity (`sensor.nosana_node_<first_8_chars>_node_status`) that displays the node's status as "Queued" or "Running" by polling the Nosana API. Additional attributes like uptime, version, country, and network stats are available.
 
 ## Features
-- Fetches node specifications from `https://dashboard.k8s.prd.nos.ci/api/nodes/<solana_address>/specs` (primary).
-- Fetches state from `https://<solana_address>.node.k8s.prd.nos.ci/node/info` (sets state to "offline" if unavailable).
-- Fetches benchmark metrics from `https://dashboard.k8s.prd.nos.ci/api/benchmarks/generic-benchmark-data`.
-- Sensors for node specs, state, and performance metrics.
+- Configurable via Home Assistant's UI.
+- Displays node status ("Queued" or "Running").
+- Provides attributes: `node_address`, `uptime`, `version`, `country`, `ping_ms`, `download_mbps`, `upload_mbps`.
+- Updates every 60 seconds.
 
 ## Installation
-1. Install HACS in Home Assistant.
-2. Add this repository as a custom repository in HACS (type: Integration).
-3. Install the "Nosana Node" integration.
-4. Add the integration via `Settings > Devices & Services > Add Integration`.
-5. Enter your Nosana node’s Solana address.
+
+### Via HACS
+1. Open HACS in Home Assistant.
+2. Go to **Integrations** > **Explore & Download Repositories**.
+3. Search for "Nosana Node" or add the repository: `https://github.com/yourusername/nosana_node`.
+4. Click **Download** and install the integration.
+5. Restart Home Assistant.
+
+### Manual Installation
+1. Copy the `custom_components/nosana_node/` folder to your Home Assistant configuration directory (e.g., `~/.homeassistant/custom_components/nosana_node/`).
+2. Restart Home Assistant.
 
 ## Configuration
-- **Solana Address**: The address of your Nosana node (e.g., `67qvHLKGmM62RLevcGRde1aWhEPU3njDiemvX6RZEX6i`).
-- **Update Interval**: Polling frequency in seconds (default: 300).
+1. Go to **Settings** > **Devices & Services** > **Add Integration**.
+2. Search for and select **Nosana Node**.
+3. Enter your Solana node address (e.g., `67qvHLKGmM62RLevcGRde1aWhEPU3njDiemvX6RZEX6i`).
+4. Optionally, set a custom name (defaults to "Nosana Node <first_8_chars>").
+5. Submit to create the sensor.
 
-## Sensors
-- Node State (online/offline)
-- Node Status (e.g., PREMIUM)
-- Node Country
-- RAM Size (MB)
-- Disk Space (GB)
-- CPU Model
-- CPU Logical Cores
-- CPU Physical Cores
-- Node Version
-- System Environment
-- GPU Memory Total (MB)
-- CUDA Version
-- NVML Version
-- Network Ping (ms)
-- Download Speed (Mbps)
-- Upload Speed (Mbps)
-- GPU Name
-- Market Address
-- GPU Major Version
-- GPU Minor Version
-- Storage to CPU Bandwidth (Mbps)
-- CPU to GPU Bandwidth (Mbps)
-- System Read/Write Speed (MB/s)
-- RAM Read/Write Speed (MB/s)
-- Internet Download Speed (Mbps)
-- Internet Upload Speed (Mbps)
+The sensor will appear as `sensor.nosana_node_<first_8_chars>_node_status` (e.g., `sensor.nosana_node_67qvHLKG_node_status`).
 
-## Support
-Report issues at [GitHub Issues](https://github.com/NateTheGreatX/hacs-nosana-node/issues).
+## Usage
+- **Lovelace Card**:
+  ```yaml
+  type: entities
+  entities:
+    - entity: sensor.nosana_node_67qvHLKG_node_status
+      name: Nosana Node Status
+    - type: attribute
+      entity: sensor.nosana_node_67qvHLKG_node_status
+      attribute: version
+      name: Node Version
+    - type: attribute
+      entity: sensor.nosana_node_67qvHLKG_node_status
+      attribute: ping_ms
+      name: Ping
+  ```
+- **Automation**:
+  ```yaml
+  alias: Notify if Nosana Node is Running
+  trigger:
+    platform: state
+    entity_id: sensor.nosana_node_67qvHLKG_node_status
+    to: "Running"
+  action:
+    service: notify.notify
+    data:
+      message: "Nosana node is now running!"
+  ```
+
+## Notes
+- Ensure the Nosana API (`https://<node_address>.node.k8s.prd.nos.ci/node/info`) is accessible. Test with a browser or `curl`.
+- If authentication is required, contact the developer to add API key support.
+- Report issues at: https://github.com/yourusername/nosana_node/issues
+
+## License
+MIT License
