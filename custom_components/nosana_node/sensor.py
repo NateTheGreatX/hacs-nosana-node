@@ -36,6 +36,10 @@ async def async_setup_entry(
         NosanaNodeUploadSensor(coordinator, entry.title, node_address),
         # new sensors from specs / markets
         NosanaNodeMarketSensor(coordinator, entry.title, node_address),
+        NosanaNodeMarketAddressSensor(coordinator, entry.title, node_address),
+        NosanaNodeMarketTypeSensor(coordinator, entry.title, node_address),
+        NosanaNodeMarketNosRewardSensor(coordinator, entry.title, node_address),
+        NosanaNodeMarketUsdRewardSensor(coordinator, entry.title, node_address),
         NosanaNodeRamSensor(coordinator, entry.title, node_address),
         NosanaNodeDiskSensor(coordinator, entry.title, node_address),
         NosanaNodeCpuSensor(coordinator, entry.title, node_address),
@@ -233,7 +237,58 @@ class NosanaNodeMarketSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         # market_name is populated by the coordinator
-        return self.coordinator.data.get("market_name")
+        return self.coordinator.data.get("market", {}).get("name")
+
+
+class NosanaNodeMarketAddressSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "market_address")
+        self._attr_icon = "mdi:map-marker"
+
+    @property
+    def state(self) -> Optional[str]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("market", {}).get("address")
+
+
+class NosanaNodeMarketTypeSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "market_type")
+        self._attr_icon = "mdi:shape"
+
+    @property
+    def state(self) -> Optional[str]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("market", {}).get("type")
+
+
+class NosanaNodeMarketNosRewardSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "nos_reward_per_second")
+        self._attr_icon = "mdi:currency-usd"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[float]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("market", {}).get("nos_reward_per_second")
+
+
+class NosanaNodeMarketUsdRewardSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "usd_reward_per_hour")
+        self._attr_icon = "mdi:currency-usd"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "USD/h"
+
+    @property
+    def state(self) -> Optional[float]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("market", {}).get("usd_reward_per_hour")
 
 
 class NosanaNodeRamSensor(_BaseNosanaSensor):

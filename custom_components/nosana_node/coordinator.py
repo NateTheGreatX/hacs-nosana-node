@@ -4,8 +4,7 @@ import logging
 from datetime import timedelta
 
 import async_timeout
-from homeassistant.exceptions import UpdateFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """Fetch data from Nosana API and related endpoints.
 
         Returns a dict that preserves the original `/node/info` top-level keys
-        for backward compatibility, and adds `specs` and `market_name`.
+        for backward compatibility, and adds `specs` and `market` dict.
         """
         try:
             async with async_timeout.timeout(10):
@@ -65,14 +64,21 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 else:
                     _LOGGER.debug("Markets endpoint returned status %s", getattr(resp_markets, "status", None))
 
-                # Determine market name from market address in specs (fallback to info)
+                # Determine market address from specs (fallback to info)
                 market_address = None
                 if isinstance(specs, dict):
                     market_address = specs.get("marketAddress") or specs.get("market_address")
                 if not market_address and isinstance(info, dict):
                     market_address = info.get("marketAddress") or info.get("market_address")
 
-                market_name = None
+                market = {
+                    "address": market_address,
+                    "name": None,
+                    "type": None,
+                    "nos_reward_per_second": None,
+                    "usd_reward_per_hour": None,
+                }
+
                 if market_address and isinstance(markets, list):
                     for m in markets:
                         if not isinstance(m, dict):
@@ -81,13 +87,31 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         for key in ("address", "marketAddress", "market_address", "id"):
                             if m.get(key) == market_address:
                                 # extract a name from common keys
-                                market_name = m.get("name") or m.get("marketName") or m.get("title")
+                                market["name"] = m.get("name") or m.get("marketName") or m.get("title")
+                                # market type
+                                market["type"] = m.get("type") or m.get("marketType") or m.get("category")
+                                # slug
+                                market["slug"] = m.get("slug") or m.get("marketSlug")
+                                # try to extract reward fields using several possible keys, prefer snake_case keys present in your example
+                                market["nos_reward_per_second"] = (
+                                    m.get("nos_reward_per_second")
+                                    or m.get("nosRewardPerSecond")
+                                    or m.get("rewardPerSecond")
+                                    or m.get("reward_per_second")
+                                )
+                                market["usd_reward_per_hour"] = (
+                                    m.get("usd_reward_per_hour")
+                                    or m.get("usdRewardPerHour")
+                                    or m.get("rewardPerHourUsd")
+                                    or m.get("rewardPerHour")
+                                    or m.get("reward_per_hour_usd")
+                                )
                                 break
-                        if market_name:
+                        if market.get("name"):
                             break
 
                 # Merge info with extra fields so existing sensors keep working
-                merged = {**(info or {}), "specs": specs or {}, "market_name": market_name}
+                merged = {**(info or {}), "specs": specs or {}, "market": market}
                 return merged
         except UpdateFailed:
             raise
