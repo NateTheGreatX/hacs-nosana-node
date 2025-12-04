@@ -50,10 +50,35 @@ class _BaseNosanaSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = f"{name} {display_suffix}"
         # Keep the unique id stable by using the raw suffix form (lower/underscored)
         self._attr_unique_id = f"nosana_node_{node_address[:8]}_{suffix.replace(' ', '_').lower()}"
+        # Keep the device name (based on the config entry title) so device_info can use it
+        self._device_name = name
 
     @property
     def available(self) -> bool:
         return self.coordinator.data is not None
+
+    @property
+    def device_info(self) -> dict:
+        """Return device information for device registry grouping.
+
+        The device is identified by (DOMAIN, node_address) so multiple entities
+        created for the same node are grouped under one device entry.
+        """
+        info = {
+            "identifiers": {("nosana_node", self._node_address)},
+            "name": self._device_name,
+            "manufacturer": "Nosana",
+            "model": "Nosana Node",
+        }
+        # Add software version/model if coordinator has data
+        if self.coordinator.data:
+            model = self.coordinator.data.get("info", {}).get("model")
+            version = self.coordinator.data.get("info", {}).get("version")
+            if model:
+                info["model"] = model
+            if version:
+                info["sw_version"] = version
+        return info
 
 
 class NosanaNodeStatusSensor(_BaseNosanaSensor):
@@ -69,6 +94,26 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
             return None
         state = self.coordinator.data.get("state")
         return "Queued" if state == "QUEUED" else "Running"
+
+    @property
+    def entity_picture(self) -> Optional[str]:
+        """Return a path to the integration image for UI display.
+
+        Try HACS common locations and a local /local path. This doesn't
+        verify the URL exists; the frontend will handle missing images.
+        """
+        # HACS installs community files to /hacsfiles/<repository>/ or /community/<repository>/ depending on HACS version.
+        # Using both common prefixes improves compatibility.
+        repo_name = "NateTheGreatX/hacs-nosana-node"
+        candidates = [
+            f"/hacsfiles/{repo_name.split('/')[-1]}/logomark.svg",
+            f"/community/{repo_name.split('/')[-1]}/logomark.svg",
+            # Local fallback if the user put the file under config/www/nosana_node/
+            "/local/nosana_node/logomark.svg",
+            # Raw GitHub fallback (may be blocked by CORS), uses raw.githubusercontent.com on the default branch main
+            f"https://raw.githubusercontent.com/{repo_name}/main/logomark.svg",
+        ]
+        return candidates[0]
 
 
 class NosanaNodeUptimeSensor(_BaseNosanaSensor):
