@@ -34,6 +34,15 @@ async def async_setup_entry(
         NosanaNodePingSensor(coordinator, entry.title, node_address),
         NosanaNodeDownloadSensor(coordinator, entry.title, node_address),
         NosanaNodeUploadSensor(coordinator, entry.title, node_address),
+        # new sensors from specs / markets
+        NosanaNodeMarketSensor(coordinator, entry.title, node_address),
+        NosanaNodeRamSensor(coordinator, entry.title, node_address),
+        NosanaNodeDiskSensor(coordinator, entry.title, node_address),
+        NosanaNodeCpuSensor(coordinator, entry.title, node_address),
+        NosanaNodeLogicalCoresSensor(coordinator, entry.title, node_address),
+        NosanaNodePhysicalCoresSensor(coordinator, entry.title, node_address),
+        NosanaNodeGpuModelSensor(coordinator, entry.title, node_address),
+        NosanaNodeMemoryGpuSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -209,3 +218,123 @@ class NosanaNodeUploadSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("info", {}).get("network", {}).get("upload_mbps")
+
+
+# New sensors from specs/markets
+class NosanaNodeMarketSensor(_BaseNosanaSensor):
+    """Sensor for the market name determined from specs/markets endpoints."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "market")
+        self._attr_icon = "mdi:store"
+
+    @property
+    def state(self) -> Optional[str]:
+        if self.coordinator.data is None:
+            return None
+        # market_name is populated by the coordinator
+        return self.coordinator.data.get("market_name")
+
+
+class NosanaNodeRamSensor(_BaseNosanaSensor):
+    """Sensor for the node RAM in MB."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "ram")
+        self._attr_native_unit_of_measurement = "MB"
+        self._attr_icon = "mdi:memory"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("ram")
+
+
+class NosanaNodeDiskSensor(_BaseNosanaSensor):
+    """Sensor for the node disk space in GB."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "disk_space")
+        self._attr_native_unit_of_measurement = "GB"
+        self._attr_icon = "mdi:harddisk"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("diskSpace")
+
+
+class NosanaNodeCpuSensor(_BaseNosanaSensor):
+    """Sensor for the CPU model string."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "cpu")
+        self._attr_icon = "mdi:cpu-64-bit"
+
+    @property
+    def state(self) -> Optional[str]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("cpu")
+
+
+class NosanaNodeLogicalCoresSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "logical_cores")
+        self._attr_icon = "mdi:chip"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "cores"
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("logicalCores")
+
+
+class NosanaNodePhysicalCoresSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "physical_cores")
+        self._attr_icon = "mdi:chip"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "cores"
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("physicalCores")
+
+
+class NosanaNodeGpuModelSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "gpu_model")
+        self._attr_icon = "mdi:gpu"
+
+    @property
+    def state(self) -> Optional[str]:
+        if self.coordinator.data is None:
+            return None
+        gpus = self.coordinator.data.get("specs", {}).get("gpus") or []
+        if not isinstance(gpus, list) or not gpus:
+            return None
+        first = gpus[0]
+        return first.get("gpu") if isinstance(first, dict) else None
+
+
+class NosanaNodeMemoryGpuSensor(_BaseNosanaSensor):
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "memory_gpu")
+        self._attr_native_unit_of_measurement = "MB"
+        self._attr_icon = "mdi:memory"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[float]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("memoryGPU")
