@@ -4,8 +4,20 @@ import logging
 from datetime import timedelta
 
 import async_timeout
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+# UpdateFailed has moved across HA versions; import defensively
+try:
+    # Newer locations
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+except Exception:  # pragma: no cover - defensive fallback
+    try:
+        from homeassistant.exceptions import UpdateFailed
+    except Exception:
+        # As a last resort define a local UpdateFailed that inherits Exception so code raises something
+        class UpdateFailed(Exception):
+            """Fallback UpdateFailed exception."""
 
 _LOGGER = logging.getLogger(__name__)
 
