@@ -47,6 +47,7 @@ async def async_setup_entry(
         NosanaNodePhysicalCoresSensor(coordinator, entry.title, node_address),
         NosanaNodeGpuModelSensor(coordinator, entry.title, node_address),
         NosanaNodeMemoryGpuSensor(coordinator, entry.title, node_address),
+        NosanaNodeQueuePositionSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -393,3 +394,43 @@ class NosanaNodeMemoryGpuSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("specs", {}).get("memoryGPU")
+
+
+class NosanaNodeQueuePositionSensor(_BaseNosanaSensor):
+    """Sensor for the node queue position inside the market queue."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "queue_position")
+        self._attr_icon = "mdi:format-list-numbered"
+        self._position: Optional[int] = None
+        self._total: Optional[int] = None
+        self._raw_status: Optional[int] = None
+
+    @property
+    def state(self) -> Optional[int]:
+        return self._position
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {}
+        if self._total is not None:
+            attrs["queue_total"] = self._total
+        if self._raw_status is not None:
+            attrs["raw_status"] = self._raw_status
+        return attrs
+
+    async def async_update(self) -> None:
+        """Fetch latest queue position from the coordinator helper."""
+        try:
+            position, total, status = await self.coordinator.async_get_node_queue_position(
+                self._node_address
+            )
+            self._position = position
+            self._total = total
+            self._raw_status = status
+        except Exception:
+            # Keep previous values on error; HA will log exception via coordinator if desired.
+            self._position = None
+            self._total = None
+            self._raw_status = None
+

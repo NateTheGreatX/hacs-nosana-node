@@ -1,21 +1,21 @@
 # custom_components/nosana_node/coordinator.py
 """Data coordinator for Nosana Node integration."""
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime
+from typing import Optional, Tuple
 
 import async_timeout
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# UpdateFailed has moved across HA versions; import defensively
+# Import UpdateFailed in a way that works across Home Assistant versions
 try:
-    # Newer locations
-    from homeassistant.helpers.update_coordinator import UpdateFailed
+    # Preferred location in many versions
+    from homeassistant.exceptions import UpdateFailed  # type: ignore
 except Exception:  # pragma: no cover - defensive fallback
     try:
-        from homeassistant.exceptions import UpdateFailed
+        from homeassistant.helpers.update_coordinator import UpdateFailed  # type: ignore
     except Exception:
-        # As a last resort define a local UpdateFailed that inherits Exception so code raises something
         class UpdateFailed(Exception):
             """Fallback UpdateFailed exception."""
 
@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 class NosanaNodeCoordinator(DataUpdateCoordinator):
     """Class to manage fetching Nosana node data."""
 
-    def __init__(self, hass, node_address):
+    def __init__(self, hass, node_address: str):
         """Initialize the coordinator."""
         self.node_address = node_address
         self.info_url = f"https://{node_address}.node.k8s.prd.nos.ci/node/info"
@@ -33,6 +33,12 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self.markets_url = "https://dashboard.k8s.prd.nos.ci/api/markets"
         # Reuse Home Assistant's shared aiohttp session
         self._session = async_get_clientsession(hass)
+
+        # markets cache (avoid fetching the markets list every update)
+        self._markets_cache: Optional[list] = None
+        self._markets_last_fetch: Optional[datetime] = None
+        # configure how often to refetch markets (seconds)
+        self._markets_ttl_seconds = 300
 
         super().__init__(
             hass,
@@ -64,17 +70,31 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 else:
                     specs = await resp_specs.json()
 
-                # Fetch markets list
-                resp_markets = await self._session.get(self.markets_url)
+                # Fetch markets list (cached)
                 markets = []
-                if resp_markets.status == 200:
+                now = datetime.utcnow()
+                should_refetch_markets = True
+                if self._markets_cache is not None and self._markets_last_fetch is not None:
+                    elapsed = (now - self._markets_last_fetch).total_seconds()
+                    if elapsed < self._markets_ttl_seconds:
+                        should_refetch_markets = False
+
+                if should_refetch_markets:
                     try:
-                        markets = await resp_markets.json()
+                        resp_markets = await self._session.get(self.markets_url)
+                        if resp_markets.status == 200:
+                            markets = await resp_markets.json()
+                        else:
+                            _LOGGER.debug("Markets endpoint returned status %s", getattr(resp_markets, "status", None))
+                            markets = []
+                        # update cache
+                        self._markets_cache = markets
+                        self._markets_last_fetch = now
                     except Exception:
-                        _LOGGER.warning("Failed to decode markets JSON from %s", self.markets_url)
-                        markets = []
+                        _LOGGER.warning("Failed to fetch markets from %s", self.markets_url)
+                        markets = self._markets_cache or []
                 else:
-                    _LOGGER.debug("Markets endpoint returned status %s", getattr(resp_markets, "status", None))
+                    markets = self._markets_cache or []
 
                 # Determine market address from specs (fallback to info)
                 market_address = None
@@ -104,7 +124,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                                 market["type"] = m.get("type") or m.get("marketType") or m.get("category")
                                 # slug
                                 market["slug"] = m.get("slug") or m.get("marketSlug")
-                                # try to extract reward fields using several possible keys, prefer snake_case keys present in your example
+                                # try to extract reward fields using several possible keys
                                 market["nos_reward_per_second"] = (
                                     m.get("nos_reward_per_second")
                                     or m.get("nosRewardPerSecond")
@@ -130,3 +150,88 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.exception("Error fetching Nosana node data: %s", err)
             raise UpdateFailed(err)
+
+    # ---------- Solana queue position helper (optional dependencies) ----------
+    async def async_get_node_queue_position(self, node_id_str: str, market_id_str: Optional[str] = None, rpc_url: str = "https://api.mainnet-beta.solana.com") -> Tuple[Optional[int], Optional[int], Optional[int]]:
+        """Return (position, total_in_queue, status_code).
+
+        This uses optional Solana dependencies. If the required packages are not
+        installed the method will log a debug message and return (None, None, None).
+        """
+        try:
+            # Lazy import so integration still loads without these packages
+            from solana.rpc.async_api import AsyncClient  # type: ignore
+            from solana.publickey import PublicKey  # type: ignore
+            import base64
+            import borsh_construct as borsh  # type: ignore
+        except Exception:
+            _LOGGER.debug("Solana libraries not available; cannot fetch queue position")
+            return None, None, None
+
+        # Minimal borsh schemas (discriminator=8 bytes, pubkeys 32 bytes)
+        market_schema = borsh.CStruct(
+            "discriminator" / borsh.Bytes(8),
+            "authority" / borsh.Bytes(32),
+            "queue_type" / borsh.U8,
+            "job_price" / borsh.U64,
+            "job_timeout" / borsh.I64,
+            "job_expiration" / borsh.I64,
+            "node_stake_minimum" / borsh.U128,
+            "queue" / borsh.Vec(borsh.Bytes(32)),
+        )
+
+        node_schema = borsh.CStruct(
+            "discriminator" / borsh.Bytes(8),
+            "authority" / borsh.Bytes(32),
+            "market" / borsh.Bytes(32),
+            "status" / borsh.U8,
+        )
+
+        def _decode_account_data(raw) -> Optional[bytes]:
+            if raw is None:
+                return None
+            if isinstance(raw, (list, tuple)) and len(raw) >= 1 and isinstance(raw[0], str):
+                return base64.b64decode(raw[0])
+            if isinstance(raw, (bytes, bytearray)):
+                return bytes(raw)
+            return None
+
+        try:
+            async with AsyncClient(rpc_url) as client:
+                node_pubkey = PublicKey(node_id_str)
+
+                node_resp = await client.get_account_info(node_pubkey)
+                node_raw = _decode_account_data(node_resp.value.data if node_resp.value else None)
+                if not node_raw:
+                    _LOGGER.debug("Node account not found on Solana: %s", node_id_str)
+                    return None, None, None
+
+                parsed_node = node_schema.parse(node_raw)
+                market_pubkey = PublicKey(bytes(parsed_node.market))
+
+                if market_id_str and str(market_pubkey) != market_id_str:
+                    _LOGGER.debug("Node not in specified market (on-chain) %s != %s", market_id_str, market_pubkey)
+                    return None, None, int(parsed_node.status)
+
+                status = int(parsed_node.status)
+
+                market_resp = await client.get_account_info(market_pubkey)
+                market_raw = _decode_account_data(market_resp.value.data if market_resp.value else None)
+                if not market_raw:
+                    _LOGGER.debug("Market account not found on Solana: %s", market_pubkey)
+                    return None, None, status
+
+                parsed_market = market_schema.parse(market_raw)
+                queue_bytes_list = parsed_market.queue or []
+                queue = [PublicKey(bytes(pk)) for pk in queue_bytes_list]
+                total = len(queue)
+
+                for i, pk in enumerate(queue):
+                    if str(pk) == str(node_pubkey):
+                        return i + 1, total, status
+
+                return None, total, status
+        except Exception as e:
+            _LOGGER.debug("Error fetching queue position from Solana RPC: %s", e)
+            return None, None, None
+
