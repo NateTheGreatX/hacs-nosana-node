@@ -2,7 +2,7 @@
 """Data coordinator for Nosana Node integration."""
 import logging
 from datetime import timedelta, datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import async_timeout
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -20,6 +20,88 @@ except Exception:  # pragma: no cover - defensive fallback
             """Fallback UpdateFailed exception."""
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# --- minimal base58 encoding (pure python) ---
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode(data: bytes) -> str:
+    """Encode bytes to base58 (pure Python)."""
+    num = int.from_bytes(data, "big")
+    if num == 0:
+        # preserve leading zeros count
+        n_pad = len(data) - len(data.lstrip(b"\0"))
+        return _B58_ALPHABET[0] * n_pad
+    enc = []
+    while num > 0:
+        num, rem = divmod(num, 58)
+        enc.append(_B58_ALPHABET[rem])
+    # leading zero bytes -> '1'
+    n_pad = len(data) - len(data.lstrip(b"\0"))
+    return _B58_ALPHABET[0] * n_pad + "".join(reversed(enc))
+
+
+def _decode_account_data(raw) -> Optional[bytes]:
+    """Decode account data shapes returned by Solana RPC into raw bytes."""
+    if raw is None:
+        return None
+    # common RPC shape: [base64_string, "base64"]
+    if isinstance(raw, (list, tuple)) and len(raw) >= 1 and isinstance(raw[0], str):
+        import base64
+
+        return base64.b64decode(raw[0])
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    return None
+
+
+def _extract_pubkey_vec_candidates(raw: bytes) -> List[List[bytes]]:
+    """Heuristic: find possible borsh Vec(pubkey) occurrences in raw bytes.
+
+    Borsh vec encodes a u32 little-endian length followed by N items. For pubkeys
+    items are 32 bytes each. This scans for any plausible (length, items) slice
+    and returns candidate lists of pubkey byte sequences.
+    """
+    candidates: List[List[bytes]] = []
+    if not raw:
+        return candidates
+    Lmax = (len(raw) // 32) + 1
+    # scan through the blob looking for a 4-byte little-endian length that yields
+    # a plausible number of 32-byte pubkey entries remaining
+    for i in range(0, max(1, len(raw) - 4)):
+        # read u32 LE at position i
+        length = int.from_bytes(raw[i : i + 4], "little")
+        if length <= 0 or length > Lmax:
+            continue
+        start = i + 4
+        needed = length * 32
+        if start + needed <= len(raw):
+            pubkeys = [
+                raw[start + j * 32 : start + (j + 1) * 32] for j in range(length)
+            ]
+            if all(len(pk) == 32 for pk in pubkeys):
+                candidates.append(pubkeys)
+    return candidates
+
+
+def _get_queue_position_from_market_raw(market_raw: bytes, node_addr_b58: str) -> Optional[Tuple[int, int]]:
+    """Return (position, total) if node found in any plausible queue vec, else None.
+
+    If multiple candidate vecs are found prefer the longest one.
+    """
+    candidates = _extract_pubkey_vec_candidates(market_raw)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: len(c), reverse=True)
+    for pubkeys in candidates:
+        pubkey_strs = [_b58encode(pk) for pk in pubkeys]
+        try:
+            idx = pubkey_strs.index(node_addr_b58)
+            return idx + 1, len(pubkey_strs)
+        except ValueError:
+            continue
+    return None
 
 
 class NosanaNodeCoordinator(DataUpdateCoordinator):
@@ -151,86 +233,56 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Error fetching Nosana node data: %s", err)
             raise UpdateFailed(err)
 
-    # ---------- Solana queue position helper (optional dependencies) ----------
+    # ---------- Solana queue position helper (no borsh dependency) ----------
     async def async_get_node_queue_position(self, node_id_str: str, market_id_str: Optional[str] = None, rpc_url: str = "https://api.mainnet-beta.solana.com") -> Tuple[Optional[int], Optional[int], Optional[int]]:
         """Return (position, total_in_queue, status_code).
 
-        This uses optional Solana dependencies. If the required packages are not
-        installed the method will log a debug message and return (None, None, None).
+        This implementation avoids borsh-construct and instead searches for a
+        plausible borsh-encoded Vec<Pubkey> (u32 length + 32-byte entries) inside
+        the market account raw bytes. The function uses the Solana `AsyncClient`
+        to fetch account data but does not require `borsh-construct`.
         """
         try:
-            # Lazy import so integration still loads without these packages
             from solana.rpc.async_api import AsyncClient  # type: ignore
             from solana.publickey import PublicKey  # type: ignore
-            import base64
-            import borsh_construct as borsh  # type: ignore
         except Exception:
             _LOGGER.debug("Solana libraries not available; cannot fetch queue position")
             return None, None, None
 
-        # Minimal borsh schemas (discriminator=8 bytes, pubkeys 32 bytes)
-        market_schema = borsh.CStruct(
-            "discriminator" / borsh.Bytes(8),
-            "authority" / borsh.Bytes(32),
-            "queue_type" / borsh.U8,
-            "job_price" / borsh.U64,
-            "job_timeout" / borsh.I64,
-            "job_expiration" / borsh.I64,
-            "node_stake_minimum" / borsh.U128,
-            "queue" / borsh.Vec(borsh.Bytes(32)),
-        )
+        # First, determine the market address to inspect.
+        market_address = market_id_str
+        if not market_address:
+            # Try to use the REST specs endpoint for this node
+            try:
+                resp = await self._session.get(self.specs_url)
+                if resp.status == 200:
+                    specs = await resp.json()
+                    market_address = specs.get("marketAddress") or specs.get("market_address")
+            except Exception:
+                _LOGGER.debug("Failed to fetch specs for determining market address")
 
-        node_schema = borsh.CStruct(
-            "discriminator" / borsh.Bytes(8),
-            "authority" / borsh.Bytes(32),
-            "market" / borsh.Bytes(32),
-            "status" / borsh.U8,
-        )
-
-        def _decode_account_data(raw) -> Optional[bytes]:
-            if raw is None:
-                return None
-            if isinstance(raw, (list, tuple)) and len(raw) >= 1 and isinstance(raw[0], str):
-                return base64.b64decode(raw[0])
-            if isinstance(raw, (bytes, bytearray)):
-                return bytes(raw)
-            return None
+        if not market_address:
+            _LOGGER.debug("No market address available for node %s", node_id_str)
+            return None, None, None
 
         try:
             async with AsyncClient(rpc_url) as client:
-                node_pubkey = PublicKey(node_id_str)
-
-                node_resp = await client.get_account_info(node_pubkey)
-                node_raw = _decode_account_data(node_resp.value.data if node_resp.value else None)
-                if not node_raw:
-                    _LOGGER.debug("Node account not found on Solana: %s", node_id_str)
-                    return None, None, None
-
-                parsed_node = node_schema.parse(node_raw)
-                market_pubkey = PublicKey(bytes(parsed_node.market))
-
-                if market_id_str and str(market_pubkey) != market_id_str:
-                    _LOGGER.debug("Node not in specified market (on-chain) %s != %s", market_id_str, market_pubkey)
-                    return None, None, int(parsed_node.status)
-
-                status = int(parsed_node.status)
-
+                market_pubkey = PublicKey(market_address)
+                # Fetch market account raw data
                 market_resp = await client.get_account_info(market_pubkey)
                 market_raw = _decode_account_data(market_resp.value.data if market_resp.value else None)
                 if not market_raw:
-                    _LOGGER.debug("Market account not found on Solana: %s", market_pubkey)
-                    return None, None, status
+                    _LOGGER.debug("Market account not found on Solana: %s", market_address)
+                    return None, None, None
 
-                parsed_market = market_schema.parse(market_raw)
-                queue_bytes_list = parsed_market.queue or []
-                queue = [PublicKey(bytes(pk)) for pk in queue_bytes_list]
-                total = len(queue)
+                # Decode the queue position using heuristic parser
+                pos_total = _get_queue_position_from_market_raw(market_raw, node_id_str)
+                if pos_total is None:
+                    return None, None, None
 
-                for i, pk in enumerate(queue):
-                    if str(pk) == str(node_pubkey):
-                        return i + 1, total, status
-
-                return None, total, status
+                position, total = pos_total
+                # We don't currently parse node on-chain status here; return None for status
+                return position, total, None
         except Exception as e:
             _LOGGER.debug("Error fetching queue position from Solana RPC: %s", e)
             return None, None, None
