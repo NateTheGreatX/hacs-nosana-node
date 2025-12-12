@@ -137,12 +137,33 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """
         try:
             async with async_timeout.timeout(10):
-                # Fetch the node info
-                resp_info = await self._session.get(self.info_url)
-                if resp_info.status != 200:
-                    _LOGGER.error("Failed to fetch node info from %s, status: %s", self.info_url, resp_info.status)
-                    raise UpdateFailed(f"Failed to fetch node info: {resp_info.status}")
-                info = await resp_info.json()
+                # Fetch the node info (graceful fallback to Offline)
+                info: dict = {}
+                try:
+                    resp_info = await self._session.get(self.info_url)
+                    if resp_info.status == 200:
+                        info = await resp_info.json()
+                    else:
+                        _LOGGER.warning(
+                            "Failed to fetch node info from %s, status: %s",
+                            self.info_url,
+                            resp_info.status,
+                        )
+                        info = {}
+                except Exception as e:
+                    _LOGGER.warning(
+                        "Error fetching node info from %s: %s",
+                        self.info_url,
+                        e,
+                    )
+                    info = {}
+
+                # Ensure a status field exists; default to Offline when unknown/invalid
+                status = None
+                if isinstance(info, dict):
+                    status = info.get("status") or info.get("nodeStatus") or info.get("state")
+                if not isinstance(status, str) or not status:
+                    info["status"] = "Offline"
 
                 # Fetch specs
                 resp_specs = await self._session.get(self.specs_url)
@@ -230,60 +251,4 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         except UpdateFailed:
             raise
         except Exception as err:
-            _LOGGER.exception("Error fetching Nosana node data: %s", err)
-            raise UpdateFailed(err)
-
-    # ---------- Solana queue position helper (no borsh dependency) ----------
-    async def async_get_node_queue_position(self, node_id_str: str, market_id_str: Optional[str] = None, rpc_url: str = "https://api.mainnet-beta.solana.com") -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """Return (position, total_in_queue, status_code).
-
-        This implementation avoids borsh-construct and instead searches for a
-        plausible borsh-encoded Vec<Pubkey> (u32 length + 32-byte entries) inside
-        the market account raw bytes. The function uses the Solana `AsyncClient`
-        to fetch account data but does not require `borsh-construct`.
-        """
-        try:
-            from solana.rpc.async_api import AsyncClient  # type: ignore
-            from solana.publickey import PublicKey  # type: ignore
-        except Exception:
-            _LOGGER.debug("Solana libraries not available; cannot fetch queue position")
-            return None, None, None
-
-        # First, determine the market address to inspect.
-        market_address = market_id_str
-        if not market_address:
-            # Try to use the REST specs endpoint for this node
-            try:
-                resp = await self._session.get(self.specs_url)
-                if resp.status == 200:
-                    specs = await resp.json()
-                    market_address = specs.get("marketAddress") or specs.get("market_address")
-            except Exception:
-                _LOGGER.debug("Failed to fetch specs for determining market address")
-
-        if not market_address:
-            _LOGGER.debug("No market address available for node %s", node_id_str)
-            return None, None, None
-
-        try:
-            async with AsyncClient(rpc_url) as client:
-                market_pubkey = PublicKey(market_address)
-                # Fetch market account raw data
-                market_resp = await client.get_account_info(market_pubkey)
-                market_raw = _decode_account_data(market_resp.value.data if market_resp.value else None)
-                if not market_raw:
-                    _LOGGER.debug("Market account not found on Solana: %s", market_address)
-                    return None, None, None
-
-                # Decode the queue position using heuristic parser
-                pos_total = _get_queue_position_from_market_raw(market_raw, node_id_str)
-                if pos_total is None:
-                    return None, None, None
-
-                position, total = pos_total
-                # We don't currently parse node on-chain status here; return None for status
-                return position, total, None
-        except Exception as e:
-            _LOGGER.debug("Error fetching queue position from Solana RPC: %s", e)
-            return None, None, None
 
