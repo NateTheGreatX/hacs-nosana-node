@@ -96,7 +96,14 @@ class _BaseNosanaSensor(CoordinatorEntity, SensorEntity):
 
 
 class NosanaNodeStatusSensor(_BaseNosanaSensor):
-    """Sensor for the node 'state' (Queued/Running/Offline)."""
+    """Sensor for the node 'state' with explicit mapping.
+
+    Mapping:
+    - OTHER -> Running
+    - QUEUED -> Queued
+    - RUNNING -> Running
+    - OFFLINE/ERROR/missing -> Offline
+    """
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "status")
@@ -106,19 +113,17 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
     def state(self) -> StateType:
         if self.coordinator.data is None:
             return None
-        # The coordinator ensures that when info fails, all status keys are set to "Offline"
         state = self.coordinator.data.get("state")
-        if not isinstance(state, str):
+        if not isinstance(state, str) or not state.strip():
             return "Offline"
-        # Normalize
         s = state.strip().upper()
-        if s in {"OFFLINE", "UNKNOWN", "ERROR"}:
+        if s in {"OFFLINE", "ERROR"}:
             return "Offline"
         if s == "QUEUED":
             return "Queued"
-        if s == "RUNNING":
+        if s in {"RUNNING", "OTHER"}:
             return "Running"
-        # Fallback for any other unexpected value
+        # Fallback for any other unexpected value -> Offline
         return "Offline"
 
     @property
@@ -445,4 +450,3 @@ class NosanaNodeQueuePositionSensor(_BaseNosanaSensor):
             self._position = None
             self._total = None
             self._raw_status = None
-

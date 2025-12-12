@@ -126,7 +126,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="Nosana Node",
-            update_interval=timedelta(seconds=60),
+            update_interval=timedelta(seconds=30),
         )
 
     async def _async_update_data(self):
