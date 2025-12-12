@@ -163,7 +163,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 if isinstance(info, dict):
                     status = info.get("status") or info.get("nodeStatus") or info.get("state")
                 if not isinstance(status, str) or not status:
+                    # set multiple commonly used keys to ensure sensors see Offline
                     info["status"] = "Offline"
+                    info["nodeStatus"] = "Offline"
+                    info["state"] = "Offline"
 
                 # Fetch specs
                 resp_specs = await self._session.get(self.specs_url)
@@ -251,4 +254,5 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         except UpdateFailed:
             raise
         except Exception as err:
-
+            _LOGGER.exception("Error fetching Nosana node data: %s", err)
+            raise UpdateFailed(err)
