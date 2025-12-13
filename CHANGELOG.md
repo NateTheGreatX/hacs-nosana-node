@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.10
+- Normalize `status` across sensors:
+  - Info fetch failure or 500 → `Offline`.
+  - `state: OTHER` → `Running`.
+  - `state: QUEUED` → `Queued`.
+  - Unknown non-offline states → `Running`.
+- Ensure `status`, `nodeStatus`, and `state` keys are always present for automations.
+- Minor: confirm HACS logo config uses `hacs.json` → `logo: "logomark.svg"`; for Home Assistant entity pictures, place the logo in `www/` and reference via `/local/...`.
+
 ## 0.1.9
 - Default node `status` to `"Offline"` when `/node/info` fails or returns an invalid payload.
 - Improve coordinator resilience: continue updating `specs` and `market` data even if `info_url` errors.

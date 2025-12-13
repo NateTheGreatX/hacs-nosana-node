@@ -2,11 +2,11 @@
 
 This integration allows you to monitor the status and specifications of a Nosana node in Home Assistant. It exposes multiple sensor entities for node state, hardware specs, network stats, market/reward information, and queue position by polling the Nosana APIs.
 
-Version: 0.1.8
+Version: 0.1.10
 
 ## Features
 - Configurable via Home Assistant's UI.
-- Node status sensor: shows "Queued" or "Running".
+- Node status sensor: shows "Queued" or "Running" (falls back to "Offline" if the `/node/info` endpoint fails).
 - Separate sensors for network and hardware metrics (so each value updates independently):
   - status
   - uptime (seconds)
@@ -17,7 +17,9 @@ Version: 0.1.8
   - market info: market name, market address, market type, nos_reward_per_second, usd_reward_per_hour
   - queue position: the node's 1-indexed position in the on-chain market queue (requires optional Solana libraries)
 - All sensors are grouped under a single device for the node in Integrations → Devices.
-- Entity picture support: if you install via HACS the repository `logomark.svg` will be available; for local installs place `logomark.svg` under `config/www/nosana_node/` to use `/local/nosana_node/logomark.svg` as the entity picture.
+- Entity picture support:
+  - HACS store/integration logo: defined via `hacs.json` using `"logo": "logomark.svg"` at the repo root (HACS displays this in the store).
+  - Home Assistant entity picture: place the logo file under `config/www/nosana_node/logomark.svg` and reference it via `/local/nosana_node/logomark.svg`.
 - Coordinator reuses Home Assistant's HTTP session and polls every 60 seconds (markets endpoint is cached and polled at most every 5 minutes by default).
 
 ## Queue position (on-chain)
@@ -38,7 +40,7 @@ If these packages are available (installed automatically when installing via HAC
 4. Click **Download** and install the integration.
 5. Restart Home Assistant.
 
-When installed via HACS the repository `logomark.svg` is used as the store/integration logo and HACS will expose static files under `/hacsfiles/<repo>/` or `/community/<repo>/` which the integration uses for the entity picture.
+When installed via HACS, the repository `logomark.svg` is used as the store/integration logo and HACS exposes static files under `/hacsfiles/<repo>/` or `/community/<repo>/`. For entity pictures in HA, use `/local/...` and ensure the file is in `www/`.
 
 ### Manual Installation
 1. Copy the `custom_components/nosana_node/` folder to your Home Assistant configuration directory (e.g., `~/.homeassistant/custom_components/nosana_node/`).
@@ -88,7 +90,7 @@ In the Integrations → Devices view you will find a device named after the conf
 
 ## Notes & Troubleshooting
 - Ensure the Nosana API endpoints (`/node/info` and the dashboard `/api/*`) are reachable from your Home Assistant instance. Test with `curl` or a browser from the machine running Home Assistant.
-- The coordinator logs warnings if the optional `specs` or `markets` endpoints fail; a failure to fetch `/node/info` will cause the integration to mark the entry as failed.
+- The coordinator logs warnings if the optional `specs` or `markets` endpoints fail; a failure to fetch `/node/info` will cause the integration to mark the entry as `Offline`.
 - If fields appear as `unknown` or sensors are `unavailable`, check logs for fetch errors and ensure the configured node address is correct.
 
 ## Development & Contributing
@@ -96,6 +98,7 @@ In the Integrations → Devices view you will find a device named after the conf
 - If you add or change sensors, remember to bump the version in `custom_components/nosana_node/manifest.json`.
 
 ## Changelog
+- 0.1.10: Normalize status and offline handling.
 - 0.1.8: Add queue position sensor (on-chain, optional), improve markets caching, bump version.
 - 0.1.7: Added specs and market sensors (RAM, disk, CPU, cores, GPU, market rewards and type), device grouping, entity picture support, and coordinator improvements.
 - 0.1.6: Initial release (node status + attributes).

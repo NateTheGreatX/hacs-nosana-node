@@ -139,10 +139,12 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             async with async_timeout.timeout(10):
                 # Fetch the node info (graceful fallback to Offline)
                 info: dict = {}
+                info_fetch_ok = False
                 try:
                     resp_info = await self._session.get(self.info_url)
                     if resp_info.status == 200:
                         info = await resp_info.json()
+                        info_fetch_ok = True
                     else:
                         _LOGGER.warning(
                             "Failed to fetch node info from %s, status: %s",
@@ -158,15 +160,36 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     )
                     info = {}
 
-                # Ensure a status field exists; default to Offline when unknown/invalid
-                status = None
-                if isinstance(info, dict):
-                    status = info.get("status") or info.get("nodeStatus") or info.get("state")
-                if not isinstance(status, str) or not status:
-                    # set multiple commonly used keys to ensure sensors see Offline
-                    info["status"] = "Offline"
-                    info["nodeStatus"] = "Offline"
-                    info["state"] = "Offline"
+                # Normalize status/state for automations
+                normalized_status = "Offline"
+                raw_state = None
+                if info_fetch_ok and isinstance(info, dict):
+                    raw_state = info.get("state") or info.get("status") or info.get("nodeStatus")
+                    if isinstance(raw_state, str):
+                        s = raw_state.upper()
+                        if s == "OTHER":
+                            normalized_status = "Running"
+                        elif s == "QUEUED":
+                            normalized_status = "Queued"
+                        elif s in ("RUNNING", "ONLINE"):
+                            normalized_status = "Running"
+                        elif s in ("OFFLINE", "STOPPED", "ERROR"):
+                            normalized_status = "Offline"
+                        else:
+                            # unknown state but endpoint responded; assume Running
+                            normalized_status = "Running"
+                    else:
+                        # info responded but no usable state string
+                        normalized_status = "Running"
+                else:
+                    # info endpoint failed → Offline
+                    normalized_status = "Offline"
+
+                # Ensure consistent keys are present
+                info = info if isinstance(info, dict) else {}
+                info["status"] = normalized_status
+                info["nodeStatus"] = normalized_status
+                info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
 
                 # Fetch specs
                 resp_specs = await self._session.get(self.specs_url)
