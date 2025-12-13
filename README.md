@@ -15,7 +15,6 @@ Version: 0.1.10
   - ping_ms, download_mbps, upload_mbps
   - specs: ram (MB), disk_space (GB), cpu, logical_cores, physical_cores, gpu_model, memory_gpu (MB)
   - market info: market name, market address, market type, nos_reward_per_second, usd_reward_per_hour
-  - queue position: the node's 1-indexed position in the on-chain market queue (requires optional Solana libraries)
 - All sensors are grouped under a single device for the node in Integrations → Devices.
 - Entity picture support:
   - HACS store/integration logo: defined via `hacs.json` using `"logo": "logomark.svg"` at the repo root (HACS displays this in the store).
