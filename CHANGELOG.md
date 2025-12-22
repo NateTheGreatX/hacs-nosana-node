@@ -3,8 +3,8 @@
 ## 0.1.11
 - Add earnings aggregation using Home Assistant Storage (Store):
   - Fetch recent jobs (limit 10) and persist per-node job records in `storage/nosana_node/node-<address>.jobs.json`.
-  - Compute totals (USD and seconds) including ephemeral accrual for running jobs.
-  - Expose two new sensors: `earnings_usd_total` and `earnings_seconds_total`.
+  - Compute totals (USD) including ephemeral accrual for running jobs.
+  - Expose new sensor: `earnings_usd_total`.
 - Reinforce status normalization: `/node/info` failures -> `Offline`; `OTHER`/`RUNNING` -> `Running`; `QUEUED` -> `Queued`.
 - Device triggers: ensure triggers appear for the Status sensor (Running/Queued/Offline).
 - Logo: prefer placing `logomark.svg` under `config/www/nosana_node/` and use `/local/nosana_node/logomark.svg` for entity pictures. HACS store logo remains configured via `hacs.json`.

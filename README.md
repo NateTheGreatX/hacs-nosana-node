@@ -15,7 +15,7 @@ Version: 0.1.11
   - ping_ms, download_mbps, upload_mbps
   - specs: ram (MB), disk_space (GB), cpu, logical_cores, physical_cores, gpu_model, memory_gpu (MB)
   - market info: market name, market address, market type, nos_reward_per_second, usd_reward_per_hour
-  - earnings: earnings_usd_total (USD), earnings_seconds_total (seconds)
+  - earnings: earnings_usd_total (USD)
 - All sensors are grouped under a single device for the node in Integrations → Devices.
 - Entity picture support:
   - HACS store/integration logo: defined via `hacs.json` using `"logo": "logomark.svg"` at the repo root (HACS displays this in the store).
@@ -34,7 +34,7 @@ If these packages are available (installed automatically when installing via HAC
 ## Earnings aggregation (jobs API)
 - The coordinator queries `https://dashboard.k8s.prd.nos.ci/api/jobs?limit=10&offset=0&node=<node>` on each update and maintains a small per-node store under Home Assistant Storage: `storage/nosana_node/node-<address>.jobs.json`.
 - Jobs with `timeEnd == 0` are treated as running; their earnings accrue ephemerally using the current time but are only saved as finalized when `timeEnd > 0`.
-- Two sensors expose the totals: `earnings_usd_total` and `earnings_seconds_total`.
+- Sensor exposes the total: `earnings_usd_total`.
 
 ## Installation
 
@@ -70,8 +70,6 @@ In the Integrations → Devices view you will find a device named after the conf
       name: Nosana Node Status
     - entity: sensor.nosana_node_67qvHLKG_earnings_usd_total
       name: Earnings (USD)
-    - entity: sensor.nosana_node_67qvHLKG_earnings_seconds_total
-      name: Earnings Runtime (s)
     - entity: sensor.nosana_node_67qvHLKG_ping_ms
       name: Ping (ms)
     - entity: sensor.nosana_node_67qvHLKG_market

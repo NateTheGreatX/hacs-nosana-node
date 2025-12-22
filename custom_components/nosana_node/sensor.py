@@ -50,7 +50,6 @@ async def async_setup_entry(
         NosanaNodeQueuePositionSensor(coordinator, entry.title, node_address),
         # earnings sensors (aggregated via HA Store)
         NosanaNodeEarningsUsdSensor(coordinator, entry.title, node_address),
-        NosanaNodeEarningsSecondsSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -457,21 +456,3 @@ class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return (self.coordinator.data.get("earnings") or {}).get("usd_total")
-
-
-class NosanaNodeEarningsSecondsSensor(_BaseNosanaSensor):
-    """Total runtime seconds accounted across jobs."""
-
-    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
-        super().__init__(coordinator, name, node_address, "earnings_seconds_total")
-        self._attr_icon = "mdi:clock-outline"
-        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
-        self._attr_native_unit_of_measurement = "s"
-        self._attr_device_class = SensorDeviceClass.DURATION
-
-    @property
-    def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
-            return None
-        return (self.coordinator.data.get("earnings") or {}).get("seconds_total")
-
