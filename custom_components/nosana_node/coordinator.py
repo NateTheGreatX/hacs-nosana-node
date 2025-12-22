@@ -332,8 +332,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         def _compute(job: Dict[str, Any]) -> Tuple[int, float]:
             start = int(job.get("timeStart", 0) or 0)
             end = int(job.get("timeEnd", 0) or 0)
-            end_effective = end or now_ts
-            runtime = max(0, end_effective - start)
+            # Only count earnings/runtime if the job is finalized
+            if start <= 0 or end <= 0 or end < start:
+                return 0, 0.0
+            runtime = max(0, end - start)
             usdph = float(job.get("usdRewardPerHour", 0.0) or 0.0)
             earned = (runtime / 3600.0) * usdph
             return runtime, earned
@@ -369,16 +371,14 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
 
             if prev is None:
                 jobs_store[jid] = new_record
-                # Save immediately for new jobs to avoid missing if window rotates
                 changed = True
             else:
-                # Only persist if the job becomes finalized or timeEnd increases
+                # Persist when the job becomes finalized or timeEnd changes
                 prev_end = int(prev.get("timeEnd", 0) or 0)
                 if finalized and (not prev.get("finalized") or prev_end != new_record["timeEnd"]):
                     jobs_store[jid] = new_record
                     changed = True
                 else:
-                    # Keep existing stored record to avoid frequent writes; we still use ephemeral values for totals
                     pass
 
         # Optionally, we could prune very old jobs, but keep as-is for now.
@@ -389,28 +389,13 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             except Exception as e:
                 _LOGGER.debug("Failed to save jobs store: %s", e)
 
-        # Compute totals
+        # Compute totals only from finalized jobs
         total_seconds = 0
         total_usd = 0.0
-        # Start with stored jobs (finalized or last-known values)
         for rec in jobs_store.values():
-            total_seconds += int(rec.get("runtime_seconds", 0) or 0)
-            total_usd += float(rec.get("earned_usd", 0.0) or 0.0)
-        # Overlay ephemeral up-to-now values for any running jobs in the fetched window
-        for job in jobs:
-            jid = str(job.get("id"))
-            if not jid or jid not in jobs_store:
-                continue
-            if int(job.get("timeEnd", 0) or 0) == 0 and int(job.get("timeStart", 0) or 0) > 0:
-                runtime, earned = _compute(job)
-                prev = jobs_store[jid]
-                # adjust delta compared to stored snapshot
-                delta_sec = runtime - int(prev.get("runtime_seconds", 0) or 0)
-                delta_usd = earned - float(prev.get("earned_usd", 0.0) or 0.0)
-                if delta_sec > 0:
-                    total_seconds += delta_sec
-                if delta_usd > 1e-9:
-                    total_usd += delta_usd
+            if int(rec.get("timeEnd", 0) or 0) > 0:
+                total_seconds += int(rec.get("runtime_seconds", 0) or 0)
+                total_usd += float(rec.get("earned_usd", 0.0) or 0.0)
 
         return {
             "usd_total": round(total_usd, 6),
