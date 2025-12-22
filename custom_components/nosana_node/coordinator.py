@@ -1,12 +1,13 @@
 # custom_components/nosana_node/coordinator.py
 """Data coordinator for Nosana Node integration."""
 import logging
-from datetime import timedelta, datetime
-from typing import Optional, Tuple, List
+from datetime import timedelta, datetime, timezone
+from typing import Optional, Tuple, List, Dict, Any
 
 import async_timeout
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 # Import UpdateFailed in a way that works across Home Assistant versions
 try:
@@ -113,8 +114,11 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self.info_url = f"https://{node_address}.node.k8s.prd.nos.ci/node/info"
         self.specs_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{node_address}/specs"
         self.markets_url = "https://dashboard.k8s.prd.nos.ci/api/markets"
+        self.jobs_url_base = "https://dashboard.k8s.prd.nos.ci/api/jobs"
         # Reuse Home Assistant's shared aiohttp session
         self._session = async_get_clientsession(hass)
+        # HA Store for per-node job accounting
+        self._store = Store(hass, 1, f"nosana_node/node-{node_address}.jobs.json")
 
         # markets cache (avoid fetching the markets list every update)
         self._markets_cache: Optional[list] = None
@@ -133,10 +137,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """Fetch data from Nosana API and related endpoints.
 
         Returns a dict that preserves the original `/node/info` top-level keys
-        for backward compatibility, and adds `specs` and `market` dict.
+        for backward compatibility, and adds `specs`, `market`, and `earnings` dicts.
         """
         try:
-            async with async_timeout.timeout(10):
+            async with async_timeout.timeout(15):
                 # Fetch the node info (graceful fallback to Offline)
                 info: dict = {}
                 info_fetch_ok = False
@@ -192,12 +196,16 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
 
                 # Fetch specs
-                resp_specs = await self._session.get(self.specs_url)
-                if resp_specs.status != 200:
-                    _LOGGER.warning("Failed to fetch specs from %s, status: %s", self.specs_url, resp_specs.status)
+                try:
+                    resp_specs = await self._session.get(self.specs_url)
+                    if resp_specs.status != 200:
+                        _LOGGER.warning("Failed to fetch specs from %s, status: %s", self.specs_url, resp_specs.status)
+                        specs = {}
+                    else:
+                        specs = await resp_specs.json()
+                except Exception:
+                    _LOGGER.warning("Error fetching specs from %s", self.specs_url)
                     specs = {}
-                else:
-                    specs = await resp_specs.json()
 
                 # Fetch markets list (cached)
                 markets = []
@@ -232,7 +240,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 if not market_address and isinstance(info, dict):
                     market_address = info.get("marketAddress") or info.get("market_address")
 
-                market = {
+                market: Dict[str, Any] = {
                     "address": market_address,
                     "name": None,
                     "type": None,
@@ -271,11 +279,153 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         if market.get("name"):
                             break
 
+                # Update earnings via jobs API + HA Store
+                earnings = await self._async_update_jobs_and_earnings()
+
                 # Merge info with extra fields so existing sensors keep working
-                merged = {**(info or {}), "specs": specs or {}, "market": market}
+                merged = {**(info or {}), "specs": specs or {}, "market": market, "earnings": earnings}
                 return merged
         except UpdateFailed:
             raise
         except Exception as err:
             _LOGGER.exception("Error fetching Nosana node data: %s", err)
             raise UpdateFailed(err)
+
+    async def _async_update_jobs_and_earnings(self) -> Dict[str, Any]:
+        """Fetch recent jobs, update HA Store for this node, and compute totals.
+
+        Strategy:
+        - Fetch up to 10 most recent jobs for this node.
+        - Maintain a per-node store of jobs that we've seen/accounted.
+        - For running jobs (timeEnd == 0), compute ephemeral earnings using now; only finalize when timeEnd > 0.
+        - Save the store only when new jobs are discovered or jobs become finalized.
+        """
+        try:
+            # Load store (structure: {"jobs": {id: {record}}})
+            store_data = await self._store.async_load() or {}
+            jobs_store: Dict[str, Any] = store_data.get("jobs") or {}
+        except Exception:
+            jobs_store = {}
+            store_data = {"jobs": jobs_store}
+
+        # Fetch jobs list (limit=10)
+        params = f"?limit=10&offset=0&node={self.node_address}"
+        jobs_url = f"{self.jobs_url_base}{params}"
+        jobs: List[Dict[str, Any]] = []
+        try:
+            resp = await self._session.get(jobs_url)
+            if resp.status == 200:
+                body = await resp.json()
+                j = body.get("jobs") if isinstance(body, dict) else None
+                if isinstance(j, list):
+                    jobs = j
+            else:
+                _LOGGER.debug("Jobs endpoint returned status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("Error fetching jobs from %s: %s", jobs_url, e)
+
+        # Update store entries
+        changed = False
+        now_ts = int(datetime.now(tz=timezone.utc).timestamp())
+        seen_ids: set[str] = set()
+
+        def _compute(job: Dict[str, Any]) -> Tuple[int, float]:
+            start = int(job.get("timeStart", 0) or 0)
+            end = int(job.get("timeEnd", 0) or 0)
+            end_effective = end or now_ts
+            runtime = max(0, end_effective - start)
+            usdph = float(job.get("usdRewardPerHour", 0.0) or 0.0)
+            earned = (runtime / 3600.0) * usdph
+            return runtime, earned
+
+        for job in jobs:
+            try:
+                jid = str(job.get("id"))
+            except Exception:
+                continue
+            if not jid or jid == "None":
+                continue
+            seen_ids.add(jid)
+
+            # Skip jobs with no start time
+            if int(job.get("timeStart", 0) or 0) <= 0:
+                continue
+
+            runtime, earned = _compute(job)
+            finalized = int(job.get("timeEnd", 0) or 0) > 0
+
+            prev = jobs_store.get(jid)
+            new_record = {
+                "id": int(job.get("id", 0) or 0),
+                "timeStart": int(job.get("timeStart", 0) or 0),
+                "timeEnd": int(job.get("timeEnd", 0) or 0),
+                "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
+                "runtime_seconds": int(runtime),
+                "earned_usd": float(earned),
+                "state": job.get("state"),
+                "finalized": bool(finalized),
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+            }
+
+            if prev is None:
+                jobs_store[jid] = new_record
+                # Save immediately for new jobs to avoid missing if window rotates
+                changed = True
+            else:
+                # Only persist if the job becomes finalized or timeEnd increases
+                prev_end = int(prev.get("timeEnd", 0) or 0)
+                if finalized and (not prev.get("finalized") or prev_end != new_record["timeEnd"]):
+                    jobs_store[jid] = new_record
+                    changed = True
+                else:
+                    # Keep existing stored record to avoid frequent writes; we still use ephemeral values for totals
+                    pass
+
+        # Optionally, we could prune very old jobs, but keep as-is for now.
+
+        if changed:
+            try:
+                await self._store.async_save({"jobs": jobs_store})
+            except Exception as e:
+                _LOGGER.debug("Failed to save jobs store: %s", e)
+
+        # Compute totals
+        total_seconds = 0
+        total_usd = 0.0
+        # Start with stored jobs (finalized or last-known values)
+        for rec in jobs_store.values():
+            total_seconds += int(rec.get("runtime_seconds", 0) or 0)
+            total_usd += float(rec.get("earned_usd", 0.0) or 0.0)
+        # Overlay ephemeral up-to-now values for any running jobs in the fetched window
+        for job in jobs:
+            jid = str(job.get("id"))
+            if not jid or jid not in jobs_store:
+                continue
+            if int(job.get("timeEnd", 0) or 0) == 0 and int(job.get("timeStart", 0) or 0) > 0:
+                runtime, earned = _compute(job)
+                prev = jobs_store[jid]
+                # adjust delta compared to stored snapshot
+                delta_sec = runtime - int(prev.get("runtime_seconds", 0) or 0)
+                delta_usd = earned - float(prev.get("earned_usd", 0.0) or 0.0)
+                if delta_sec > 0:
+                    total_seconds += delta_sec
+                if delta_usd > 1e-9:
+                    total_usd += delta_usd
+
+        return {
+            "usd_total": round(total_usd, 6),
+            "seconds_total": int(total_seconds),
+            "jobs_tracked": len(jobs_store),
+        }
+
+    async def async_get_node_queue_position(self, node_address: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+        """Stub for queue position to avoid errors if sensor calls it.
+
+        Returns (position, total, raw_status) or (None, None, None) if unavailable.
+        """
+        try:
+            # Not implemented in this build. Return None triplet gracefully.
+            return None, None, None
+        except Exception:
+            return None, None, None
+

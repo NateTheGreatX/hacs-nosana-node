@@ -48,6 +48,9 @@ async def async_setup_entry(
         NosanaNodeGpuModelSensor(coordinator, entry.title, node_address),
         NosanaNodeMemoryGpuSensor(coordinator, entry.title, node_address),
         NosanaNodeQueuePositionSensor(coordinator, entry.title, node_address),
+        # earnings sensors (aggregated via HA Store)
+        NosanaNodeEarningsUsdSensor(coordinator, entry.title, node_address),
+        NosanaNodeEarningsSecondsSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -130,21 +133,9 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
     def entity_picture(self) -> Optional[str]:
         """Return a path to the integration image for UI display.
 
-        Try HACS common locations and a local /local path. This doesn't
-        verify the URL exists; the frontend will handle missing images.
+        Prefer a local /local path per HA docs (place file under config/www/...).
         """
-        # HACS installs community files to /hacsfiles/<repository>/ or /community/<repository>/ depending on HACS version.
-        # Using both common prefixes improves compatibility.
-        repo_name = "NateTheGreatX/hacs-nosana-node"
-        candidates = [
-            f"/hacsfiles/{repo_name.split('/')[-1]}/logomark.svg",
-            f"/community/{repo_name.split('/')[-1]}/logomark.svg",
-            # Local fallback if the user put the file under config/www/nosana_node/
-            "/local/nosana_node/logomark.svg",
-            # Raw GitHub fallback (may be blocked by CORS), uses raw.githubusercontent.com on the default branch main
-            f"https://raw.githubusercontent.com/{repo_name}/main/logomark.svg",
-        ]
-        return candidates[0]
+        return "/local/nosana_node/logomark.svg"
 
 
 class NosanaNodeUptimeSensor(_BaseNosanaSensor):
@@ -450,3 +441,37 @@ class NosanaNodeQueuePositionSensor(_BaseNosanaSensor):
             self._position = None
             self._total = None
             self._raw_status = None
+
+
+class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
+    """Total USD earned (aggregated from jobs via HA Store)."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "earnings_usd_total")
+        self._attr_icon = "mdi:currency-usd"
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_native_unit_of_measurement = "USD"
+
+    @property
+    def state(self) -> Optional[float]:
+        if self.coordinator.data is None:
+            return None
+        return (self.coordinator.data.get("earnings") or {}).get("usd_total")
+
+
+class NosanaNodeEarningsSecondsSensor(_BaseNosanaSensor):
+    """Total runtime seconds accounted across jobs."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "earnings_seconds_total")
+        self._attr_icon = "mdi:clock-outline"
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_native_unit_of_measurement = "s"
+        self._attr_device_class = SensorDeviceClass.DURATION
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return (self.coordinator.data.get("earnings") or {}).get("seconds_total")
+

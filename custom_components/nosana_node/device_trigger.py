@@ -36,12 +36,19 @@ async def async_get_triggers(hass: HomeAssistant, device_id: str) -> List[Dict]:
     # Collect all entity_ids for this device in our domain
     entries = [e for e in ent_reg.entities.get_entries_for_device_id(device_id) if e.domain == "sensor"]
 
-    # Find the status sensor entity (suffix contains "_status")
+    # Find the status sensor entity (unique_id ends with _status)
     status_entity_id: Optional[str] = None
     for entry in entries:
-        if entry.platform == DOMAIN and entry.entity_id.endswith("_status"):
+        if entry.platform == DOMAIN and entry.unique_id and entry.unique_id.endswith("_status"):
             status_entity_id = entry.entity_id
             break
+
+    if not status_entity_id:
+        # Fallback: pick an entity with entity_id ending _status
+        for entry in entries:
+            if entry.platform == DOMAIN and entry.entity_id.endswith("_status"):
+                status_entity_id = entry.entity_id
+                break
 
     if not status_entity_id:
         return triggers
@@ -100,4 +107,3 @@ async def async_attach_trigger(
 async def async_get_trigger_capabilities(hass: HomeAssistant, config: Dict) -> Dict:
     """Return trigger capabilities (none for these simple triggers)."""
     return {"extra_fields": []}
-
