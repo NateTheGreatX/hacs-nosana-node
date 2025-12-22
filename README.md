@@ -1,6 +1,6 @@
 # Nosana Node Home Assistant Integration
 
-This integration allows you to monitor the status and specifications of a Nosana node in Home Assistant. It exposes multiple sensor entities for node state, hardware specs, network stats, market/reward information, queue position, and aggregated earnings by polling the Nosana APIs.
+This integration allows you to monitor the status and specifications of a Nosana node in Home Assistant. It exposes multiple sensor entities for node state, hardware specs, network stats, market/reward information, and aggregated earnings by polling the Nosana APIs.
 
 Version: 0.1.11
 
@@ -21,15 +21,6 @@ Version: 0.1.11
   - HACS store/integration logo: defined via `hacs.json` using `"logo": "logomark.svg"` at the repo root (HACS displays this in the store).
   - Home Assistant entity picture: place the logo file under `config/www/nosana_node/logomark.svg` and it will be referenced via `/local/nosana_node/logomark.svg`.
 - Coordinator reuses Home Assistant's HTTP session and polls every 30 seconds (markets endpoint is cached and polled at most every 5 minutes by default).
-
-## Queue position (on-chain)
-The queue position sensor attempts to fetch the node's position from the on-chain market queue using the Solana RPC API. This requires additional Python packages which are optional and only needed if you want this sensor to work:
-
-- `solana`
-- `solders`
-- `borsh-construct`
-
-If these packages are available (installed automatically when installing via HACS because they are listed in `manifest.json`), the integration will query Solana for the queue position. If not installed the sensor will remain unavailable and the integration still functions for the other sensors.
 
 ## Earnings aggregation (jobs API)
 - The coordinator queries `https://dashboard.k8s.prd.nos.ci/api/jobs?limit=10&offset=0&node=<node>` on each update and maintains a small per-node store under Home Assistant Storage: `storage/nosana_node/node-<address>.jobs.json`.
@@ -99,10 +90,9 @@ In the Integrations → Devices view you will find a device named after the conf
 - If you add or change sensors, remember to bump the version in `custom_components/nosana_node/manifest.json`.
 
 ## Changelog
-- 0.1.11: Add earnings aggregation sensors; improve device triggers; logo guidance.
+- 0.1.11: Add earnings aggregation sensor; improve device triggers; logo guidance.
 - 0.1.10: Normalize status and offline handling.
-- 0.1.8: Add queue position sensor (on-chain, optional), improve markets caching, bump version.
-- 0.1.7: Added specs and market sensors (RAM, disk, CPU, cores, GPU, market rewards and type), device grouping, entity picture support, and coordinator improvements.
+- 0.1.8: Added specs and market sensors (RAM, disk, CPU, cores, GPU, market rewards and type), device grouping, entity picture support, and coordinator improvements.
 - 0.1.6: Initial release (node status + attributes).
 
 ## License

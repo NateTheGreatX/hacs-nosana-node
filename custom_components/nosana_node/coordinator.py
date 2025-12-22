@@ -417,15 +417,3 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             "seconds_total": int(total_seconds),
             "jobs_tracked": len(jobs_store),
         }
-
-    async def async_get_node_queue_position(self, node_address: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """Stub for queue position to avoid errors if sensor calls it.
-
-        Returns (position, total, raw_status) or (None, None, None) if unavailable.
-        """
-        try:
-            # Not implemented in this build. Return None triplet gracefully.
-            return None, None, None
-        except Exception:
-            return None, None, None
-
