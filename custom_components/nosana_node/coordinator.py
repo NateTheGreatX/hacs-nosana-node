@@ -125,6 +125,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self._markets_last_fetch: Optional[datetime] = None
         # configure how often to refetch markets (seconds)
         self._markets_ttl_seconds = 300
+        # jobs fetch TTL (seconds) and last status tracking
+        self._jobs_last_fetch: Optional[datetime] = None
+        self._jobs_ttl_seconds = 15 * 60  # 15 minutes
+        self._last_status: Optional[str] = None
 
         super().__init__(
             hass,
@@ -194,6 +198,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 info["status"] = normalized_status
                 info["nodeStatus"] = normalized_status
                 info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
+
+                # detect status change
+                status_changed = self._last_status != normalized_status
+                self._last_status = normalized_status
 
                 # Fetch specs
                 try:
@@ -279,8 +287,38 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         if market.get("name"):
                             break
 
-                # Update earnings via jobs API + HA Store
-                earnings = await self._async_update_jobs_and_earnings()
+                # Jobs fetch: TTL (15 min) or immediate on status change
+                should_fetch_jobs = False
+                if status_changed:
+                    should_fetch_jobs = True
+                else:
+                    if self._jobs_last_fetch is None:
+                        should_fetch_jobs = True
+                    else:
+                        elapsed_jobs = (now - self._jobs_last_fetch).total_seconds()
+                        should_fetch_jobs = elapsed_jobs >= self._jobs_ttl_seconds
+
+                if should_fetch_jobs:
+                    earnings = await self._async_update_jobs_and_earnings()
+                    self._jobs_last_fetch = now
+                else:
+                    # Recompute totals from store without hitting jobs API
+                    try:
+                        store_data = await self._store.async_load() or {}
+                        jobs_store: Dict[str, Any] = store_data.get("jobs") or {}
+                    except Exception:
+                        jobs_store = {}
+                    total_seconds = 0
+                    total_usd = 0.0
+                    for rec in jobs_store.values():
+                        if int(rec.get("timeEnd", 0) or 0) > 0:
+                            total_seconds += int(rec.get("runtime_seconds", 0) or 0)
+                            total_usd += float(rec.get("earned_usd", 0.0) or 0.0)
+                    earnings = {
+                        "usd_total": round(total_usd, 6),
+                        "seconds_total": int(total_seconds),
+                        "jobs_tracked": len(jobs_store),
+                    }
 
                 # Merge info with extra fields so existing sensors keep working
                 merged = {**(info or {}), "specs": specs or {}, "market": market, "earnings": earnings}

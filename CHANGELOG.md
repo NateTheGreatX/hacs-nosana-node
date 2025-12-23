@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13
+- Throttle jobs API via TTL: fetch at most every 15 minutes, similar to markets TTL logic, and recompute totals from Store between fetches.
+- Fetch jobs immediately when node status changes (Offline/Queued/Running), to keep earnings up to date without hitting rate limits.
+- Earnings totals count only finalized jobs (`timeEnd > 0`); running jobs are not accrued into totals.
+- Default entity picture path updated to HACS-served `/hacsfiles/hacs-nosana-node/logomark.svg` with optional `/local/...` fallback.
+
 ## 0.1.11
 - Add earnings aggregation using Home Assistant Storage (Store):
   - Fetch recent jobs (limit 10) and persist per-node job records in `storage/nosana_node/node-<address>.jobs.json`.
@@ -7,7 +13,7 @@
   - Expose new sensor: `earnings_usd_total`.
 - Reinforce status normalization: `/node/info` failures -> `Offline`; `OTHER`/`RUNNING` -> `Running`; `QUEUED` -> `Queued`.
 - Device triggers: ensure triggers appear for the Status sensor (Running/Queued/Offline).
-- Logo: prefer placing `logomark.svg` under `config/www/nosana_node/` and use `/local/nosana_node/logomark.svg` for entity pictures. HACS store logo remains configured via `hacs.json`.
+- Logo: entity picture now defaults to HACS-served path `/hacsfiles/hacs-nosana-node/logomark.svg` to avoid `/local` 404s; optional `/local/nosana_node/logomark.svg` still supported if copied to `www/`.
 
 ## 0.1.10
 - Normalize `status` across sensors:
