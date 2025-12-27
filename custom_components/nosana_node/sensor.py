@@ -49,6 +49,7 @@ async def async_setup_entry(
         NosanaNodeMemoryGpuSensor(coordinator, entry.title, node_address),
         # earnings sensors (aggregated via HA Store)
         NosanaNodeEarningsUsdSensor(coordinator, entry.title, node_address),
+        NosanaNodeBenchmarkTokensPerSecondSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -416,4 +417,28 @@ class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return (self.coordinator.data.get("earnings") or {}).get("usd_total")
+
+
+class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
+    """Latest LLM benchmark tokens/sec (mean) with model_id attribute."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "benchmark_tokens_per_second")
+        self._attr_icon = "mdi:chart-line"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "tokens/s"
+
+    @property
+    def state(self) -> Optional[float]:
+        data = self.coordinator.data or {}
+        bench = (data.get("earnings") or {}).get("benchmark") or {}
+        val = bench.get("tokens_per_second_mean")
+        return float(val) if isinstance(val, (int, float)) else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        bench = (data.get("earnings") or {}).get("benchmark") or {}
+        model_id = bench.get("model_id")
+        return {"model_id": model_id} if isinstance(model_id, str) else {}
 
