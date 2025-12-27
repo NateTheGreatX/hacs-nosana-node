@@ -420,25 +420,39 @@ class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
 
 
 class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
-    """Latest LLM benchmark tokens/sec (mean) with model_id attribute."""
+    """Latest LLM benchmark tokens/sec (mean) with model_id attribute.
+
+    Keeps the last known value when new data is unavailable (e.g., job not finalized yet).
+    """
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "benchmark_tokens_per_second")
         self._attr_icon = "mdi:chart-line"
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "tokens/s"
+        self._last_value: Optional[float] = None
+        self._last_model_id: Optional[str] = None
 
     @property
     def state(self) -> Optional[float]:
         data = self.coordinator.data or {}
         bench = (data.get("earnings") or {}).get("benchmark") or {}
         val = bench.get("tokens_per_second_mean")
-        return float(val) if isinstance(val, (int, float)) else None
+        if isinstance(val, (int, float)):
+            self._last_value = float(val)
+            # update cached model id if present
+            mid = bench.get("model_id")
+            if isinstance(mid, str):
+                self._last_model_id = mid
+            return self._last_value
+        # No new finalized benchmark → keep last known value
+        return self._last_value
 
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
         bench = (data.get("earnings") or {}).get("benchmark") or {}
         model_id = bench.get("model_id")
-        return {"model_id": model_id} if isinstance(model_id, str) else {}
-
+        if isinstance(model_id, str):
+            self._last_model_id = model_id
+        return {"model_id": self._last_model_id} if isinstance(self._last_model_id, str) else {}
