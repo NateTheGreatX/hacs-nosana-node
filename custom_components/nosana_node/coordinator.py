@@ -335,8 +335,9 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         Strategy:
         - Fetch up to 10 most recent jobs for this node.
         - Maintain a per-node store of jobs that we've seen/accounted.
-        - For running jobs (timeEnd == 0), compute ephemeral earnings using now; only finalize when timeEnd > 0.
-        - Save the store only when new jobs are discovered or jobs become finalized.
+        - Only count finalized jobs (timeEnd > 0) toward totals.
+        - Save the store when new jobs are discovered, jobs finalize, or benchmark data is backfilled.
+        - Parse llm-benchmark results and store under each job record as job['benchmark'].
         """
         try:
             # Load store (structure: {"jobs": {id: {record}}})
@@ -362,10 +363,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.debug("Error fetching jobs from %s: %s", jobs_url, e)
 
-        # Update store entries
         changed = False
-        now_ts = int(datetime.now(tz=timezone.utc).timestamp())
-        seen_ids: set[str] = set()
 
         def _compute(job: Dict[str, Any]) -> Tuple[int, float]:
             start = int(job.get("timeStart", 0) or 0)
@@ -378,14 +376,40 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             earned = (runtime / 3600.0) * usdph
             return runtime, earned
 
+        def _extract_llm_benchmark(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            jr = job.get("jobResult")
+            if not isinstance(jr, dict):
+                return None
+            op_states = jr.get("opStates")
+            if not isinstance(op_states, list):
+                return None
+            for op in op_states:
+                if not isinstance(op, dict):
+                    continue
+                if op.get("operationId") == "llm-benchmark" and op.get("status") == "success":
+                    results = op.get("results", {})
+                    arr = results.get("results_llm_benchmark")
+                    if isinstance(arr, list) and arr:
+                        raw = arr[0]
+                        try:
+                            import json as _json
+                            parsed = _json.loads(raw)
+                            model_id = parsed.get("model_id") or parsed.get("results", {}).get("users_1", {}).get("model_id")
+                            tps = parsed.get("results", {}).get("users_1", {}).get("tokens_per_second", {})
+                            mean = tps.get("mean")
+                            if model_id and isinstance(mean, (int, float)):
+                                return {"model_id": model_id, "tokens_per_second_mean": float(mean)}
+                        except Exception:
+                            return None
+            return None
+
+        latest_bench: Optional[Dict[str, Any]] = None
+        latest_bench_time: int = 0
+
         for job in jobs:
-            try:
-                jid = str(job.get("id"))
-            except Exception:
-                continue
+            jid = str(job.get("id")) if job is not None else None
             if not jid or jid == "None":
                 continue
-            seen_ids.add(jid)
 
             # Skip jobs with no start time
             if int(job.get("timeStart", 0) or 0) <= 0:
@@ -395,31 +419,52 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             finalized = int(job.get("timeEnd", 0) or 0) > 0
 
             prev = jobs_store.get(jid)
-            new_record = {
-                "id": int(job.get("id", 0) or 0),
-                "timeStart": int(job.get("timeStart", 0) or 0),
-                "timeEnd": int(job.get("timeEnd", 0) or 0),
-                "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
-                "runtime_seconds": int(runtime),
-                "earned_usd": float(earned),
-                "state": job.get("state"),
-                "finalized": bool(finalized),
-                "last_seen": datetime.now(timezone.utc).isoformat(),
-            }
-
+            # Backfill benchmark if present and missing
+            bench = _extract_llm_benchmark(job) if finalized else None
             if prev is None:
+                new_record = {
+                    "id": int(job.get("id", 0) or 0),
+                    "timeStart": int(job.get("timeStart", 0) or 0),
+                    "timeEnd": int(job.get("timeEnd", 0) or 0),
+                    "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
+                    "runtime_seconds": int(runtime),
+                    "earned_usd": float(earned),
+                    "state": job.get("state"),
+                    "finalized": bool(finalized),
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                }
+                if bench:
+                    new_record["benchmark"] = bench
                 jobs_store[jid] = new_record
                 changed = True
             else:
-                # Persist when the job becomes finalized or timeEnd changes
                 prev_end = int(prev.get("timeEnd", 0) or 0)
-                if finalized and (not prev.get("finalized") or prev_end != new_record["timeEnd"]):
-                    jobs_store[jid] = new_record
+                if finalized and (not prev.get("finalized") or prev_end != int(job.get("timeEnd", 0) or 0)):
+                    # update finalized info
+                    prev.update({
+                        "timeEnd": int(job.get("timeEnd", 0) or 0),
+                        "runtime_seconds": int(runtime),
+                        "earned_usd": float(earned),
+                        "finalized": True,
+                        "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
+                        "last_seen": datetime.now(timezone.utc).isoformat(),
+                    })
+                    if bench:
+                        prev["benchmark"] = bench
                     changed = True
                 else:
-                    pass
+                    # If benchmark exists and not stored yet, backfill
+                    if bench and not prev.get("benchmark"):
+                        prev["benchmark"] = bench
+                        prev["last_seen"] = datetime.now(timezone.utc).isoformat()
+                        changed = True
 
-        # Optionally, we could prune very old jobs, but keep as-is for now.
+            # Track latest benchmark by timeEnd
+            if finalized and bench:
+                time_end = int(job.get("timeEnd", 0) or 0)
+                if time_end > latest_bench_time:
+                    latest_bench_time = time_end
+                    latest_bench = bench
 
         if changed:
             try:
@@ -435,8 +480,21 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 total_seconds += int(rec.get("runtime_seconds", 0) or 0)
                 total_usd += float(rec.get("earned_usd", 0.0) or 0.0)
 
+        # Expose latest benchmark (from latest 10 or store fallback)
+        latest_bench_out: Dict[str, Any] = {}
+        if latest_bench:
+            latest_bench_out = latest_bench
+        else:
+            # fallback: scan store for any benchmark
+            for rec in jobs_store.values():
+                b = rec.get("benchmark")
+                if isinstance(b, dict):
+                    latest_bench_out = b
+                    break
+
         return {
             "usd_total": round(total_usd, 6),
             "seconds_total": int(total_seconds),
             "jobs_tracked": len(jobs_store),
+            "benchmark": latest_bench_out,
         }

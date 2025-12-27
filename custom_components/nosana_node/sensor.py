@@ -416,3 +416,4 @@ class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return (self.coordinator.data.get("earnings") or {}).get("usd_total")
+
