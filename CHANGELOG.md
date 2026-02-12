@@ -28,6 +28,10 @@
 - Default node `status` to `"Offline"` when `/node/info` fails or returns an invalid payload.
 - Improve coordinator resilience: continue updating `specs` and `market` data even if `info_url` errors.
 
+## 0.1.5
+
+- Fix: Cap job runtime earnings calculation at job timeout value.
+
 ## 0.1.4
 - Fixed `ValueError` for non-numeric sensors by removing `state_class="measurement"` for `status`, `system_environment`, `nvml_version`, `gpu_name`, `market_address`, and `state`.
 

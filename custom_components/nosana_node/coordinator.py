@@ -368,10 +368,20 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         def _compute(job: Dict[str, Any]) -> Tuple[int, float]:
             start = int(job.get("timeStart", 0) or 0)
             end = int(job.get("timeEnd", 0) or 0)
+            timeout = int(job.get("timeout", 0) or 0)
+
             # Only count earnings/runtime if the job is finalized
             if start <= 0 or end <= 0 or end < start:
                 return 0, 0.0
-            runtime = max(0, end - start)
+
+            # Calculate actual duration
+            duration = max(0, end - start)
+
+            # Cap runtime at timeout if timeout is set and exceeded
+            runtime = duration
+            if timeout > 0 and duration > timeout:
+                runtime = timeout
+
             usdph = float(job.get("usdRewardPerHour", 0.0) or 0.0)
             earned = (runtime / 3600.0) * usdph
             return runtime, earned
