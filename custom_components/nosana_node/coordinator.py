@@ -153,7 +153,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     # Try dashboard-hosted info endpoint first (if available), else fall back to per-node info
                     dashboard_info_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{self.node_address}/info"
                     try:
-                        resp_info = await self._session.get(dashboard_info_url)
+                        resp_info = await self._session.get(self.info_url)
                         if resp_info.status == 404 or resp_info.status == 410:
                             # fallback to per-node subdomain
                             _LOGGER.debug("Dashboard info endpoint returned %s; falling back to per-node info", resp_info.status)
