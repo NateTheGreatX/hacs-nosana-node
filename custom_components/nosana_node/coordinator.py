@@ -543,6 +543,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             prev = jobs_store.get(jid)
             # Backfill benchmark if present and missing
             bench = _extract_llm_benchmark(job) if finalized else None
+
             if prev is None:
                 new_record = {
                     "id": int(job.get("id", 0) or 0),
@@ -556,6 +557,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     "finalized": bool(finalized),
                     "last_seen": datetime.now(timezone.utc).isoformat(),
                 }
+                _LOGGER.debug("Storing new job %s timeout=%s", jid, new_record.get("timeout"))
                 if bench:
                     new_record["benchmark"] = bench
                 jobs_store[jid] = new_record
@@ -564,6 +566,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 prev_end = int(prev.get("timeEnd", 0) or 0)
                 if finalized and (not prev.get("finalized") or prev_end != int(job.get("timeEnd", 0) or 0)):
                     # update finalized info
+                    _LOGGER.debug("Updating job %s timeout from %s to %s", jid, prev.get("timeout"), int(job.get("timeout", 0) or 0))
                     prev.update({
                         "timeEnd": int(job.get("timeEnd", 0) or 0),
                         "timeout": int(job.get("timeout", 0) or 0),
@@ -641,14 +644,20 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     # If the freshly returned job lacks timeout, try to recover it from the persisted store
                     jid_str = str(chosen.get("id"))
                     timeout_val = int(chosen.get("timeout", 0) or 0)
+                    recovered = False
                     if timeout_val == 0 and jobs_store and jid_str in jobs_store:
                         try:
                             stored = jobs_store.get(jid_str) or {}
                             t_stored = int(stored.get("timeout", 0) or 0)
                             if t_stored > 0:
                                 timeout_val = t_stored
+                                recovered = True
                         except Exception:
                             pass
+                    _LOGGER.debug(
+                        "Selected latest job from fresh jobs id=%s timeStart=%s timeEnd=%s timeout=%s recovered_from_store=%s",
+                        chosen.get("id"), chosen.get("timeStart"), chosen.get("timeEnd"), timeout_val, recovered,
+                    )
                     latest_job_out = {
                         "id": int(chosen.get("id", 0) or 0),
                         "timeStart": int(chosen.get("timeStart", 0) or 0),
@@ -673,6 +682,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         recent_candidate = rec
                 chosen = running_candidate or recent_candidate
                 if isinstance(chosen, dict):
+                    _LOGGER.debug(
+                        "Selected latest job from store id=%s timeStart=%s timeEnd=%s timeout=%s",
+                        chosen.get("id"), chosen.get("timeStart"), chosen.get("timeEnd"), chosen.get("timeout"),
+                    )
                     latest_job_out = {
                         "id": int(chosen.get("id", 0) or 0),
                         "timeStart": int(chosen.get("timeStart", 0) or 0),
