@@ -616,32 +616,69 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     latest_bench_out = b
                     break
 
-        # Determine latest job (by timeStart) among fetched jobs/store for sensors
+        # Determine latest job (prefer fresh fetched jobs when available)
         latest_job_out: Dict[str, Any] = {}
         try:
-            # Prefer a currently running job (timeEnd == 0). Otherwise pick the most recent by timeStart.
-            running_candidate = None
-            running_ts = 0
-            recent_candidate = None
-            recent_ts = 0
-            for rec in jobs_store.values():
-                ts = int(rec.get("timeStart", 0) or 0)
-                te = int(rec.get("timeEnd", 0) or 0)
-                if te == 0 and ts > running_ts:
-                    running_ts = ts
-                    running_candidate = rec
-                if ts > recent_ts:
-                    recent_ts = ts
-                    recent_candidate = rec
+            # Prefer recent running job from the freshly fetched `jobs` list
+            if isinstance(jobs, list) and jobs:
+                running = None
+                running_ts = 0
+                recent = None
+                recent_ts = 0
+                for job in jobs:
+                    if not isinstance(job, dict):
+                        continue
+                    ts = int(job.get("timeStart", 0) or 0)
+                    te = int(job.get("timeEnd", 0) or 0)
+                    if te == 0 and ts > running_ts:
+                        running_ts = ts
+                        running = job
+                    if ts > recent_ts:
+                        recent_ts = ts
+                        recent = job
+                chosen = running or recent
+                if isinstance(chosen, dict):
+                    # If the freshly returned job lacks timeout, try to recover it from the persisted store
+                    jid_str = str(chosen.get("id"))
+                    timeout_val = int(chosen.get("timeout", 0) or 0)
+                    if timeout_val == 0 and jobs_store and jid_str in jobs_store:
+                        try:
+                            stored = jobs_store.get(jid_str) or {}
+                            t_stored = int(stored.get("timeout", 0) or 0)
+                            if t_stored > 0:
+                                timeout_val = t_stored
+                        except Exception:
+                            pass
+                    latest_job_out = {
+                        "id": int(chosen.get("id", 0) or 0),
+                        "timeStart": int(chosen.get("timeStart", 0) or 0),
+                        "timeEnd": int(chosen.get("timeEnd", 0) or 0),
+                        "timeout": int(timeout_val or 0),
+                    }
 
-            chosen = running_candidate or recent_candidate
-            if isinstance(chosen, dict):
-                latest_job_out = {
-                    "id": int(chosen.get("id", 0) or 0),
-                    "timeStart": int(chosen.get("timeStart", 0) or 0),
-                    "timeEnd": int(chosen.get("timeEnd", 0) or 0),
-                    "timeout": int(chosen.get("timeout", 0) or 0),
-                }
+            # Fallback to persisted store if no fresh jobs present or chosen is empty
+            if not latest_job_out:
+                running_candidate = None
+                running_ts = 0
+                recent_candidate = None
+                recent_ts = 0
+                for rec in jobs_store.values():
+                    ts = int(rec.get("timeStart", 0) or 0)
+                    te = int(rec.get("timeEnd", 0) or 0)
+                    if te == 0 and ts > running_ts:
+                        running_ts = ts
+                        running_candidate = rec
+                    if ts > recent_ts:
+                        recent_ts = ts
+                        recent_candidate = rec
+                chosen = running_candidate or recent_candidate
+                if isinstance(chosen, dict):
+                    latest_job_out = {
+                        "id": int(chosen.get("id", 0) or 0),
+                        "timeStart": int(chosen.get("timeStart", 0) or 0),
+                        "timeEnd": int(chosen.get("timeEnd", 0) or 0),
+                        "timeout": int(chosen.get("timeout", 0) or 0),
+                    }
         except Exception:
             latest_job_out = {}
 
