@@ -545,11 +545,22 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             bench = _extract_llm_benchmark(job) if finalized else None
 
             if prev is None:
+                # Determine initial timeout, but prefer an existing stored non-zero timeout if present
+                initial_timeout = int(job.get("timeout", 0) or 0)
+                if jid in jobs_store:
+                    try:
+                        stored_try = int(jobs_store[jid].get("timeout", 0) or 0)
+                        if stored_try > 0 and initial_timeout == 0:
+                            _LOGGER.debug("Using existing stored timeout %s for new job %s", stored_try, jid)
+                            initial_timeout = stored_try
+                    except Exception:
+                        pass
+
                 new_record = {
                     "id": int(job.get("id", 0) or 0),
                     "timeStart": int(job.get("timeStart", 0) or 0),
                     "timeEnd": int(job.get("timeEnd", 0) or 0),
-                    "timeout": int(job.get("timeout", 0) or 0),
+                    "timeout": int(initial_timeout or 0),
                     "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
                     "runtime_seconds": int(runtime),
                     "earned_usd": float(earned),
@@ -566,10 +577,23 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 prev_end = int(prev.get("timeEnd", 0) or 0)
                 if finalized and (not prev.get("finalized") or prev_end != int(job.get("timeEnd", 0) or 0)):
                     # update finalized info
-                    _LOGGER.debug("Updating job %s timeout from %s to %s", jid, prev.get("timeout"), int(job.get("timeout", 0) or 0))
+                    incoming_timeout = int(job.get("timeout", 0) or 0)
+                    stored_timeout = int(prev.get("timeout", 0) or 0)
+                    # Only overwrite a previously-known non-zero timeout with a new non-zero timeout.
+                    # Ignore incoming zero timeout to avoid clobbering known values from transient API responses.
+                    if incoming_timeout > 0:
+                        new_timeout = incoming_timeout
+                    else:
+                        new_timeout = stored_timeout
+                        if incoming_timeout == 0 and stored_timeout > 0:
+                            _LOGGER.debug(
+                                "Ignoring incoming zero timeout for job %s (keeping stored %s)", jid, stored_timeout
+                            )
+
+                    _LOGGER.debug("Updating job %s timeout from %s to %s", jid, prev.get("timeout"), new_timeout)
                     prev.update({
                         "timeEnd": int(job.get("timeEnd", 0) or 0),
-                        "timeout": int(job.get("timeout", 0) or 0),
+                        "timeout": int(new_timeout or 0),
                         "runtime_seconds": int(runtime),
                         "earned_usd": float(earned),
                         "finalized": True,
