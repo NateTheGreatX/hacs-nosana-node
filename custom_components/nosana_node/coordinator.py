@@ -610,6 +610,24 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         prev["last_seen"] = datetime.now(timezone.utc).isoformat()
                         changed = True
 
+                    # If the fresh job reports a longer timeout than stored (e.g., timeout extended),
+                    # persist the extension immediately so sensors reflect the latest timeout.
+                    try:
+                        incoming_timeout = int(job.get("timeout", 0) or 0)
+                        stored_timeout = int(prev.get("timeout", 0) or 0)
+                        if incoming_timeout > stored_timeout:
+                            prev["timeout"] = int(incoming_timeout)
+                            prev["last_seen"] = datetime.now(timezone.utc).isoformat()
+                            changed = True
+                            _LOGGER.debug(
+                                "Extended timeout for job %s from %s to %s (persisted)",
+                                jid,
+                                stored_timeout,
+                                incoming_timeout,
+                            )
+                    except Exception:
+                        pass
+
             # Track latest benchmark by timeEnd
             if finalized and bench:
                 time_end = int(job.get("timeEnd", 0) or 0)
