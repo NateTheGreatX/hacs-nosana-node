@@ -28,12 +28,9 @@ async def async_setup_entry(
 
     sensors: List[SensorEntity] = [
         NosanaNodeStatusSensor(coordinator, entry.title, node_address),
-        NosanaNodeUptimeSensor(coordinator, entry.title, node_address),
         NosanaNodeVersionSensor(coordinator, entry.title, node_address),
         NosanaNodeCountrySensor(coordinator, entry.title, node_address),
-        NosanaNodePingSensor(coordinator, entry.title, node_address),
-        NosanaNodeDownloadSensor(coordinator, entry.title, node_address),
-        NosanaNodeUploadSensor(coordinator, entry.title, node_address),
+        # network and uptime sensors removed — no longer provided by dashboard /metrics
         # new sensors from specs / markets
         NosanaNodeMarketSensor(coordinator, entry.title, node_address),
         NosanaNodeMarketAddressSensor(coordinator, entry.title, node_address),
@@ -50,6 +47,8 @@ async def async_setup_entry(
         # earnings sensors (aggregated via HA Store)
         NosanaNodeEarningsUsdSensor(coordinator, entry.title, node_address),
         NosanaNodeBenchmarkTokensPerSecondSensor(coordinator, entry.title, node_address),
+        NosanaNodeJobTimeoutHoursSensor(coordinator, entry.title, node_address),
+        NosanaNodeJobTimeLeftHoursSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -137,23 +136,9 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
         return "/local/nosana_node/logomark.svg"
 
 
-class NosanaNodeUptimeSensor(_BaseNosanaSensor):
-    """Sensor for the node uptime (seconds)."""
-
-    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
-        super().__init__(coordinator, name, node_address, "uptime")
-        self._attr_native_unit_of_measurement = "s"
-        self._attr_icon = "mdi:clock-outline"
-        # Mark as a measurement so HA knows this is a numeric measurement
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        # Use the duration device class for uptime
-        self._attr_device_class = SensorDeviceClass.DURATION
-
-    @property
-    def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("uptime")
+# Uptime and network sensors removed — the dashboard /metrics endpoint no longer provides
+# uptime or network fields (ping_ms/download_mbps/upload_mbps). They were removed from setup
+# and the implementation to avoid exposing unavailable values.
 
 
 class NosanaNodeVersionSensor(_BaseNosanaSensor):
@@ -184,52 +169,7 @@ class NosanaNodeCountrySensor(_BaseNosanaSensor):
         return self.coordinator.data.get("info", {}).get("country")
 
 
-class NosanaNodePingSensor(_BaseNosanaSensor):
-    """Sensor for the node ping in milliseconds."""
-
-    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
-        super().__init__(coordinator, name, node_address, "ping_ms")
-        self._attr_native_unit_of_measurement = "ms"
-        self._attr_icon = "mdi:speedometer"
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("info", {}).get("network", {}).get("ping_ms")
-
-
-class NosanaNodeDownloadSensor(_BaseNosanaSensor):
-    """Sensor for the node download bandwidth in Mbps."""
-
-    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
-        super().__init__(coordinator, name, node_address, "download_mbps")
-        self._attr_native_unit_of_measurement = "Mbps"
-        self._attr_icon = "mdi:download"
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("info", {}).get("network", {}).get("download_mbps")
-
-
-class NosanaNodeUploadSensor(_BaseNosanaSensor):
-    """Sensor for the node upload bandwidth in Mbps."""
-
-    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
-        super().__init__(coordinator, name, node_address, "upload_mbps")
-        self._attr_native_unit_of_measurement = "Mbps"
-        self._attr_icon = "mdi:upload"
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("info", {}).get("network", {}).get("upload_mbps")
+# network-related sensors removed
 
 
 # New sensors from specs/markets
@@ -456,3 +396,59 @@ class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
         if isinstance(model_id, str):
             self._last_model_id = model_id
         return {"model_id": self._last_model_id} if isinstance(self._last_model_id, str) else {}
+
+
+class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
+    """Job timeout in hours. 0 if the latest job is finished or missing."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "job_timeout_hours")
+        self._attr_icon = "mdi:timer-sand"
+        self._attr_native_unit_of_measurement = "h"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[float]:
+        data = self.coordinator.data or {}
+        latest = (data.get("earnings") or {}).get("latest_job") or {}
+        try:
+            time_end = int(latest.get("timeEnd", 0) or 0)
+            if time_end > 0:
+                return 0.0
+            timeout = int(latest.get("timeout", 0) or 0)
+            if timeout <= 0:
+                return 0.0
+            return round(float(timeout) / 3600.0, 6)
+        except Exception:
+            return 0.0
+
+
+class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
+    """Time left (hours) for the latest running job. 0 if finished or no timeout."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "job_time_left_hours")
+        self._attr_icon = "mdi:timer"
+        self._attr_native_unit_of_measurement = "h"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def state(self) -> Optional[float]:
+        from datetime import datetime, timezone
+
+        data = self.coordinator.data or {}
+        latest = (data.get("earnings") or {}).get("latest_job") or {}
+        try:
+            time_end = int(latest.get("timeEnd", 0) or 0)
+            if time_end > 0:
+                return 0.0
+            time_start = int(latest.get("timeStart", 0) or 0)
+            timeout = int(latest.get("timeout", 0) or 0)
+            if time_start <= 0 or timeout <= 0:
+                return 0.0
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            expire_at = int(time_start) + int(timeout)
+            left = max(0, expire_at - now_ts)
+            return round(float(left) / 3600.0, 6)
+        except Exception:
+            return 0.0

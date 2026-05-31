@@ -9,10 +9,10 @@ Version: 0.1.14
 - Node status sensor: shows "Queued" or "Running" (falls back to "Offline" if the `/node/info` endpoint fails).
 - Separate sensors for network and hardware metrics:
   - status
-  - uptime (seconds)
+  - uptime (seconds) — REMOVED (no longer provided by dashboard /metrics)
   - version
   - country
-  - ping_ms, download_mbps, upload_mbps
+  - ping_ms, download_mbps, upload_mbps — REMOVED (no longer provided by dashboard /metrics)
   - specs: ram (MB), disk_space (GB), cpu, logical_cores, physical_cores, gpu_model, memory_gpu (MB)
   - market info: market name, market address, market type, nos_reward_per_second, usd_reward_per_hour
   - earnings: earnings_usd_total (USD)
@@ -65,8 +65,8 @@ In the Integrations → Devices view you will find a device named after the conf
       name: Earnings (USD)
     - entity: sensor.nosana_node_67qvHLKG_benchmark_tokens_per_second
       name: LLM Tokens/sec (mean)
-    - entity: sensor.nosana_node_67qvHLKG_ping_ms
-      name: Ping (ms)
+    - entity: sensor.nosana_node_67qvHLKG_market
+      name: Market
     - entity: sensor.nosana_node_67qvHLKG_market
       name: Market
   ```

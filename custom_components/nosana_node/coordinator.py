@@ -112,7 +112,8 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.node_address = node_address
         self.info_url = f"https://{node_address}.node.k8s.prd.nos.ci/node/info"
-        self.specs_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{node_address}/specs"
+        # /specs endpoint removed; use /metrics as the authoritative dashboard source
+        self.metrics_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{node_address}/metrics"
         self.markets_url = "https://dashboard.k8s.prd.nos.ci/api/markets"
         self.jobs_url_base = "https://dashboard.k8s.prd.nos.ci/api/jobs"
         # Reuse Home Assistant's shared aiohttp session
@@ -149,7 +150,18 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 info: dict = {}
                 info_fetch_ok = False
                 try:
-                    resp_info = await self._session.get(self.info_url)
+                    # Try dashboard-hosted info endpoint first (if available), else fall back to per-node info
+                    dashboard_info_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{self.node_address}/info"
+                    try:
+                        resp_info = await self._session.get(dashboard_info_url)
+                        if resp_info.status == 404 or resp_info.status == 410:
+                            # fallback to per-node subdomain
+                            _LOGGER.debug("Dashboard info endpoint returned %s; falling back to per-node info", resp_info.status)
+                            resp_info = await self._session.get(self.info_url)
+                        # else proceed with resp_info
+                    except Exception:
+                        # fallback to per-node subdomain
+                        resp_info = await self._session.get(self.info_url)
                     if resp_info.status == 200:
                         info = await resp_info.json()
                         info_fetch_ok = True
@@ -193,7 +205,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     # info endpoint failed → Offline
                     normalized_status = "Offline"
 
-                # Ensure consistent keys are present
+                # Ensure consistent keys are present; uptime/network removed (no longer provided)
                 info = info if isinstance(info, dict) else {}
                 info["status"] = normalized_status
                 info["nodeStatus"] = normalized_status
@@ -203,17 +215,86 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 status_changed = self._last_status != normalized_status
                 self._last_status = normalized_status
 
-                # Fetch specs
+                # Fetch metrics (dashboard) and normalize into 'specs' shape expected by sensors
                 try:
-                    resp_specs = await self._session.get(self.specs_url)
-                    if resp_specs.status != 200:
-                        _LOGGER.warning("Failed to fetch specs from %s, status: %s", self.specs_url, resp_specs.status)
-                        specs = {}
+                    resp_metrics = await self._session.get(self.metrics_url)
+                    if resp_metrics.status != 200:
+                        _LOGGER.warning("Failed to fetch metrics from %s, status: %s", self.metrics_url, getattr(resp_metrics, "status", None))
+                        raw_metrics = {}
                     else:
-                        specs = await resp_specs.json()
+                        raw_metrics = await resp_metrics.json()
                 except Exception:
-                    _LOGGER.warning("Error fetching specs from %s", self.specs_url)
-                    specs = {}
+                    _LOGGER.warning("Error fetching metrics from %s", self.metrics_url)
+                    raw_metrics = {}
+
+                # normalization: produce a specs dict compatible with existing sensors
+                specs: Dict[str, Any] = {}
+                try:
+                    metrics = raw_metrics.get("metrics") if isinstance(raw_metrics, dict) else None
+                    # top-level package version and marketAddress
+                    if isinstance(raw_metrics, dict):
+                        # copy package version if present
+                        pkg = raw_metrics.get("package_version") or (metrics.get("package_version") if isinstance(metrics, dict) else None)
+                        if pkg:
+                            specs["packageVersion"] = pkg
+                        # marketAddress can be at top level
+                        if raw_metrics.get("marketAddress"):
+                            specs["marketAddress"] = raw_metrics.get("marketAddress")
+                    if isinstance(metrics, dict):
+                        # RAM: convert GB -> MB (use factor 1024)
+                        try:
+                            ram_gb = metrics.get("ram_gb")
+                            if isinstance(ram_gb, (int, float)):
+                                specs["ram"] = int(ram_gb * 1024)
+                        except Exception:
+                            pass
+                        # disk in GB
+                        if metrics.get("disk_gb") is not None:
+                            specs["diskSpace"] = metrics.get("disk_gb")
+                        # cpu
+                        cpu = metrics.get("cpu") or {}
+                        if isinstance(cpu, dict):
+                            specs["cpu"] = cpu.get("cpu_model")
+                            specs["logicalCores"] = cpu.get("logical_cores")
+                            specs["physicalCores"] = cpu.get("physical_cores")
+                        # gpus
+                        gpu = metrics.get("gpu") or {}
+                        if isinstance(gpu, dict):
+                            devs = gpu.get("devices") or []
+                            specs["gpus"] = []
+                            if isinstance(devs, list):
+                                for d in devs:
+                                    if isinstance(d, dict):
+                                        specs["gpus"].append({"gpu": d.get("name")})
+                                # memoryGPU from first device
+                                if devs:
+                                    first = devs[0]
+                                    if isinstance(first, dict):
+                                        specs["memoryGPU"] = first.get("vram_total_mb")
+                        # package_version/system_environment
+                        if metrics.get("package_version"):
+                            specs["packageVersion"] = metrics.get("package_version")
+                        if metrics.get("system_environment"):
+                            specs["system_environment"] = metrics.get("system_environment")
+                        # scan for model-specific tokens_per_second_mean keys
+                        bench_candidate = None
+                        best_val = None
+                        for k, v in metrics.items():
+                            if isinstance(k, str) and k.endswith("_tokens_per_second_mean") and isinstance(v, (int, float)):
+                                # model id is key without suffix
+                                model_id = k[: -len("_tokens_per_second_mean")]
+                                # choose highest value as best candidate
+                                if best_val is None or float(v) > float(best_val):
+                                    best_val = v
+                                    bench_candidate = {"model_id": model_id, "tokens_per_second_mean": float(v)}
+                        # If found, we will merge this as earnings benchmark later if jobs don't provide one
+                        metrics_benchmark = bench_candidate
+                    else:
+                        metrics_benchmark = None
+                except Exception:
+                    # Defensive: ensure specs present
+                    specs = specs or {}
+                    metrics_benchmark = None
 
                 # Fetch markets list (cached)
                 markets = []
@@ -320,7 +401,14 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         "jobs_tracked": len(jobs_store),
                     }
 
-                # Merge info with extra fields so existing sensors keep working
+                # If jobs did not provide a benchmark, consider metrics-based candidate
+                if earnings and isinstance(earnings, dict) and not (earnings.get("benchmark") or {}).get("tokens_per_second_mean"):
+                    if metrics_benchmark:
+                        earnings_out = dict(earnings)
+                        earnings_out["benchmark"] = metrics_benchmark
+                        earnings = earnings_out
+
+                # Merge info with extra fields so existing sensors keep working. Note: uptime/network removed.
                 merged = {**(info or {}), "specs": specs or {}, "market": market, "earnings": earnings}
                 return merged
         except UpdateFailed:
@@ -502,9 +590,28 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     latest_bench_out = b
                     break
 
+        # Determine latest job (by timeStart) among fetched jobs/store for sensors
+        latest_job_out: Dict[str, Any] = {}
+        try:
+            latest_ts = 0
+            for rec in jobs_store.values():
+                ts = int(rec.get("timeStart", 0) or 0)
+                if ts > latest_ts:
+                    latest_ts = ts
+                    latest_job_out = {
+                        "id": int(rec.get("id", 0) or 0),
+                        "timeStart": int(rec.get("timeStart", 0) or 0),
+                        "timeEnd": int(rec.get("timeEnd", 0) or 0),
+                        # keep raw timeout as seconds (0 if missing)
+                        "timeout": int(rec.get("timeout", 0) or 0),
+                    }
+        except Exception:
+            latest_job_out = {}
+
         return {
             "usd_total": round(total_usd, 6),
             "seconds_total": int(total_seconds),
             "jobs_tracked": len(jobs_store),
             "benchmark": latest_bench_out,
+            "latest_job": latest_job_out,
         }
