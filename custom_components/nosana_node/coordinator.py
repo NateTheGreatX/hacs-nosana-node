@@ -150,26 +150,24 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 info: dict = {}
                 info_fetch_ok = False
                 try:
-                    # Try dashboard-hosted info endpoint first (if available), else fall back to per-node info
-                    dashboard_info_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{self.node_address}/info"
+                    # Fetch the per-node info endpoint on the node subdomain
                     try:
                         resp_info = await self._session.get(self.info_url)
-                        if resp_info.status == 404 or resp_info.status == 410:
-                            # fallback to per-node subdomain
-                            _LOGGER.debug("Dashboard info endpoint returned %s; falling back to per-node info", resp_info.status)
-                            resp_info = await self._session.get(self.info_url)
-                        # else proceed with resp_info
-                    except Exception:
-                        # fallback to per-node subdomain
-                        resp_info = await self._session.get(self.info_url)
-                    if resp_info.status == 200:
-                        info = await resp_info.json()
-                        info_fetch_ok = True
-                    else:
+                        if resp_info.status == 200:
+                            info = await resp_info.json()
+                            info_fetch_ok = True
+                        else:
+                            _LOGGER.warning(
+                                "Failed to fetch node info from %s, status: %s",
+                                self.info_url,
+                                getattr(resp_info, "status", None),
+                            )
+                            info = {}
+                    except Exception as e:
                         _LOGGER.warning(
-                            "Failed to fetch node info from %s, status: %s",
+                            "Error fetching node info from %s: %s",
                             self.info_url,
-                            resp_info.status,
+                            e,
                         )
                         info = {}
                 except Exception as e:
@@ -400,6 +398,32 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         "seconds_total": int(total_seconds),
                         "jobs_tracked": len(jobs_store),
                     }
+                    # Compute latest_job from store so sensors have access when jobs API not fetched
+                    try:
+                        running_candidate = None
+                        running_ts = 0
+                        recent_candidate = None
+                        recent_ts = 0
+                        for rec in jobs_store.values():
+                            ts = int(rec.get("timeStart", 0) or 0)
+                            te = int(rec.get("timeEnd", 0) or 0)
+                            if te == 0 and ts > running_ts:
+                                running_ts = ts
+                                running_candidate = rec
+                            if ts > recent_ts:
+                                recent_ts = ts
+                                recent_candidate = rec
+                        chosen = running_candidate or recent_candidate
+                        if isinstance(chosen, dict):
+                            earnings["latest_job"] = {
+                                "id": int(chosen.get("id", 0) or 0),
+                                "timeStart": int(chosen.get("timeStart", 0) or 0),
+                                "timeEnd": int(chosen.get("timeEnd", 0) or 0),
+                                "timeout": int(chosen.get("timeout", 0) or 0),
+                            }
+                    except Exception:
+                        # leave earnings as-is if anything goes wrong
+                        pass
 
                 # If jobs did not provide a benchmark, consider metrics-based candidate
                 if earnings and isinstance(earnings, dict) and not (earnings.get("benchmark") or {}).get("tokens_per_second_mean"):
@@ -524,6 +548,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     "id": int(job.get("id", 0) or 0),
                     "timeStart": int(job.get("timeStart", 0) or 0),
                     "timeEnd": int(job.get("timeEnd", 0) or 0),
+                    "timeout": int(job.get("timeout", 0) or 0),
                     "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
                     "runtime_seconds": int(runtime),
                     "earned_usd": float(earned),
@@ -541,6 +566,7 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     # update finalized info
                     prev.update({
                         "timeEnd": int(job.get("timeEnd", 0) or 0),
+                        "timeout": int(job.get("timeout", 0) or 0),
                         "runtime_seconds": int(runtime),
                         "earned_usd": float(earned),
                         "finalized": True,
@@ -593,18 +619,29 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         # Determine latest job (by timeStart) among fetched jobs/store for sensors
         latest_job_out: Dict[str, Any] = {}
         try:
-            latest_ts = 0
+            # Prefer a currently running job (timeEnd == 0). Otherwise pick the most recent by timeStart.
+            running_candidate = None
+            running_ts = 0
+            recent_candidate = None
+            recent_ts = 0
             for rec in jobs_store.values():
                 ts = int(rec.get("timeStart", 0) or 0)
-                if ts > latest_ts:
-                    latest_ts = ts
-                    latest_job_out = {
-                        "id": int(rec.get("id", 0) or 0),
-                        "timeStart": int(rec.get("timeStart", 0) or 0),
-                        "timeEnd": int(rec.get("timeEnd", 0) or 0),
-                        # keep raw timeout as seconds (0 if missing)
-                        "timeout": int(rec.get("timeout", 0) or 0),
-                    }
+                te = int(rec.get("timeEnd", 0) or 0)
+                if te == 0 and ts > running_ts:
+                    running_ts = ts
+                    running_candidate = rec
+                if ts > recent_ts:
+                    recent_ts = ts
+                    recent_candidate = rec
+
+            chosen = running_candidate or recent_candidate
+            if isinstance(chosen, dict):
+                latest_job_out = {
+                    "id": int(chosen.get("id", 0) or 0),
+                    "timeStart": int(chosen.get("timeStart", 0) or 0),
+                    "timeEnd": int(chosen.get("timeEnd", 0) or 0),
+                    "timeout": int(chosen.get("timeout", 0) or 0),
+                }
         except Exception:
             latest_job_out = {}
 

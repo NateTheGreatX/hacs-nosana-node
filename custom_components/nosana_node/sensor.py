@@ -415,10 +415,19 @@ class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
             time_end = int(latest.get("timeEnd", 0) or 0)
             if time_end > 0:
                 return 0.0
-            timeout = int(latest.get("timeout", 0) or 0)
-            if timeout <= 0:
+
+            # timeout may be stored in seconds (typical) or milliseconds in some APIs.
+            timeout_raw = int(latest.get("timeout", 0) or 0)
+            if timeout_raw <= 0:
                 return 0.0
-            return round(float(timeout) / 3600.0, 6)
+
+            # Heuristic: if timeout looks like milliseconds (very large), convert to seconds
+            if timeout_raw > 1_000_000_000:
+                timeout_seconds = timeout_raw / 1000.0
+            else:
+                timeout_seconds = float(timeout_raw)
+
+            return round(timeout_seconds / 3600.0, 6)
         except Exception:
             return 0.0
 
@@ -435,20 +444,40 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
     @property
     def state(self) -> Optional[float]:
         from datetime import datetime, timezone
-
         data = self.coordinator.data or {}
         latest = (data.get("earnings") or {}).get("latest_job") or {}
         try:
             time_end = int(latest.get("timeEnd", 0) or 0)
             if time_end > 0:
                 return 0.0
-            time_start = int(latest.get("timeStart", 0) or 0)
-            timeout = int(latest.get("timeout", 0) or 0)
-            if time_start <= 0 or timeout <= 0:
+
+            time_start_raw = int(latest.get("timeStart", 0) or 0)
+            timeout_raw = int(latest.get("timeout", 0) or 0)
+            if time_start_raw <= 0 or timeout_raw <= 0:
                 return 0.0
+
+            # Heuristic: detect if timeStart is in milliseconds
+            if time_start_raw > 1_000_000_000_000:
+                time_start = int(time_start_raw / 1000)
+            else:
+                time_start = time_start_raw
+
+            # timeout likely in seconds; if extremely large assume ms
+            if timeout_raw > 1_000_000_000:
+                timeout_seconds = timeout_raw / 1000.0
+            else:
+                timeout_seconds = float(timeout_raw)
+
             now_ts = int(datetime.now(timezone.utc).timestamp())
-            expire_at = int(time_start) + int(timeout)
+            expire_at = int(time_start + int(timeout_seconds))
             left = max(0, expire_at - now_ts)
             return round(float(left) / 3600.0, 6)
         except Exception:
             return 0.0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        # Expose the raw latest_job for debugging convenience
+        data = self.coordinator.data or {}
+        latest = (data.get("earnings") or {}).get("latest_job")
+        return {"latest_job": latest} if isinstance(latest, dict) else {}
