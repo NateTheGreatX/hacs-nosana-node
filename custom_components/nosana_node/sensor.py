@@ -30,7 +30,11 @@ async def async_setup_entry(
         NosanaNodeStatusSensor(coordinator, entry.title, node_address),
         NosanaNodeVersionSensor(coordinator, entry.title, node_address),
         NosanaNodeCountrySensor(coordinator, entry.title, node_address),
-        # network and uptime sensors removed — no longer provided by dashboard /metrics
+        # network sensors restored from dashboard /metrics
+        NosanaNodePingSensor(coordinator, entry.title, node_address),
+        NosanaNodeDownloadSensor(coordinator, entry.title, node_address),
+        NosanaNodeUploadSensor(coordinator, entry.title, node_address),
+        NosanaNodeCountrySensor(coordinator, entry.title, node_address),
         # new sensors from specs / markets
         NosanaNodeMarketSensor(coordinator, entry.title, node_address),
         NosanaNodeMarketAddressSensor(coordinator, entry.title, node_address),
@@ -167,6 +171,54 @@ class NosanaNodeCountrySensor(_BaseNosanaSensor):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("info", {}).get("country")
+
+
+class NosanaNodePingSensor(_BaseNosanaSensor):
+    """Sensor for the network ping in milliseconds."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "ping_ms")
+        self._attr_icon = "mdi:network-latency"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "ms"
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("ping_ms")
+
+
+class NosanaNodeDownloadSensor(_BaseNosanaSensor):
+    """Sensor for the network download speed in Mbps."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "download_mbps")
+        self._attr_icon = "mdi:download"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "Mbps"
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("download_mbps")
+
+
+class NosanaNodeUploadSensor(_BaseNosanaSensor):
+    """Sensor for the network upload speed in Mbps."""
+
+    def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "upload_mbps")
+        self._attr_icon = "mdi:upload"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "Mbps"
+
+    @property
+    def state(self) -> Optional[int]:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("specs", {}).get("upload_mbps")
 
 
 # network-related sensors removed

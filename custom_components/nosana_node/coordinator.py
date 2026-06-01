@@ -249,6 +249,13 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         # disk in GB
                         if metrics.get("disk_gb") is not None:
                             specs["diskSpace"] = metrics.get("disk_gb")
+                        # network
+                        network = metrics.get("network") or {}
+                        if isinstance(network, dict):
+                            specs["ping_ms"] = network.get("ping_ms")
+                            specs["download_mbps"] = network.get("download_mbps")
+                            specs["upload_mbps"] = network.get("upload_mbps")
+                            specs["network_country"] = network.get("country")
                         # cpu
                         cpu = metrics.get("cpu") or {}
                         if isinstance(cpu, dict):
