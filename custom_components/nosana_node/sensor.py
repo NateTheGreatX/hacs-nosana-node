@@ -460,8 +460,10 @@ class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
-    def state(self) -> Optional[float]:
-        data = self.coordinator.data or {}
+    def state(self) -> float:
+        if self.coordinator.data is None:
+            return 0.0
+        data = self.coordinator.data
         latest = (data.get("earnings") or {}).get("latest_job") or {}
         try:
             time_end = int(latest.get("timeEnd", 0) or 0)
@@ -494,9 +496,11 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
-    def state(self) -> Optional[float]:
+    def state(self) -> float:
         from datetime import datetime, timezone
-        data = self.coordinator.data or {}
+        if self.coordinator.data is None:
+            return 0.0
+        data = self.coordinator.data
         latest = (data.get("earnings") or {}).get("latest_job") or {}
         try:
             time_end = int(latest.get("timeEnd", 0) or 0)
