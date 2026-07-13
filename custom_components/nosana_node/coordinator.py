@@ -153,51 +153,51 @@ class NosanaInfoCoordinator(DataUpdateCoordinator):
 class NosanaNodeCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass, node_address: str, info_coordinator: NosanaInfoCoordinator):
-         """Initialize the coordinator."""
+        """Initialize the coordinator."""
         self.node_address = node_address
         self.info_coordinator = info_coordinator
-         # /specs endpoint removed; use /metrics as the authoritative dashboard source
+        # /specs endpoint removed; use /metrics as the authoritative dashboard source
         self.metrics_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{node_address}/metrics"
         self.markets_url = "https://dashboard.k8s.prd.nos.ci/api/markets"
         self.jobs_url_base = "https://dashboard.k8s.prd.nos.ci/api/jobs"
-         # Reuse Home Assistant's shared aiohttp session
+        # Reuse Home Assistant's shared aiohttp session
         self._session = async_get_clientsession(hass)
-         # HA Store for per-node job accounting
+        # HA Store for per-node job accounting
         self._store = Store(hass, 1, f"nosana_node/node-{node_address}.jobs.json")
 
-         # markets cache (avoid fetching the markets list every update)
+        # markets cache (avoid fetching the markets list every update)
         self._markets_cache: Optional[list] = None
         self._markets_last_fetch: Optional[datetime] = None
-         # configure how often to refetch markets (seconds)
+        # configure how often to refetch markets (seconds)
         self._markets_ttl_seconds = 300
-         # jobs fetch TTL (seconds) and last status tracking
+        # jobs fetch TTL (seconds) and last status tracking
         self._jobs_last_fetch: Optional[datetime] = None
-        self._jobs_ttl_seconds = 15 * 60   # 15 minutes
+        self._jobs_ttl_seconds = 15 * 60  # 15 minutes
         self._last_status: Optional[str] = None
 
         super().__init__(
             hass,
-             _LOGGER,
+            _LOGGER,
             name="Nosana Node",
             update_interval=timedelta(seconds=30),
-         )
+        )
 
     async def _async_update_data(self):
-          """Fetch data from Nosana API and related endpoints.
+        """Fetch data from Nosana API and related endpoints.
 
         Returns a dict that preserves the original `/node/info` top-level keys
         for backward compatibility, and adds `specs`, `market`, and `earnings` dicts.
-          """
+        """
         try:
             async with async_timeout.timeout(15):
-                  # Pull info from the separate fast-polling coordinator
+                # Pull info from the separate fast-polling coordinator
                 info = self.info_coordinator.data or {}
                 normalized_status = info.get("status", "Offline")
                 raw_state = info.get("state")
                 status_changed = self._last_status != normalized_status
                 self._last_status = normalized_status
 
-                  # Fetch metrics (dashboard) and normalize into 'specs' shape expected by sensors
+                # Fetch metrics (dashboard) and normalize into 'specs' shape expected by sensors
                 try:
                     resp_metrics = await self._session.get(self.metrics_url)
                     if resp_metrics.status != 200:

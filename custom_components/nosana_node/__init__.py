@@ -11,14 +11,14 @@ PLATFORMS = [Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-     """Set up Nosana Node from a config entry."""
+    """Set up Nosana Node from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     node_address = entry.data["node_address"]
     info_coordinator = NosanaInfoCoordinator(hass, node_address)
     coordinator = NosanaNodeCoordinator(hass, node_address, info_coordinator)
 
-     # Fetch initial data
+    # Fetch initial data
     await info_coordinator.async_config_entry_first_refresh()
     await coordinator.async_config_entry_first_refresh()
 
