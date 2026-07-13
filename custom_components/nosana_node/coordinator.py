@@ -114,6 +114,7 @@ class NosanaInfoCoordinator(DataUpdateCoordinator):
         self._session = async_get_clientsession(hass)
         super().__init__(
             hass,
+            _LOGGER,
             name="Nosana Info",
             update_interval=timedelta(seconds=5),
         )
