@@ -14,7 +14,7 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, CONF_NODE_ADDRESS
-from .coordinator import NosanaNodeCoordinator
+from .coordinator import NosanaNodeCoordinator, NosanaInfoCoordinator
 
 
 async def async_setup_entry(
@@ -22,13 +22,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Nosana Node sensors from a config entry."""
-    coordinator: NosanaNodeCoordinator = hass.data[DOMAIN][entry.entry_id]
+      """Set up the Nosana Node sensors from a config entry."""
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator: NosanaNodeCoordinator = data["coordinator"]
+    info_coordinator: NosanaInfoCoordinator = data["info_coordinator"]
     node_address = entry.data[CONF_NODE_ADDRESS]
 
     sensors: List[SensorEntity] = [
-        NosanaNodeStatusSensor(coordinator, entry.title, node_address),
-        NosanaNodeVersionSensor(coordinator, entry.title, node_address),
+        NosanaNodeStatusSensor(info_coordinator, entry.title, node_address),
+        NosanaNodeVersionSensor(info_coordinator, entry.title, node_address),
         NosanaNodeCountrySensor(coordinator, entry.title, node_address),
         # network sensors restored from dashboard /metrics
         NosanaNodePingSensor(coordinator, entry.title, node_address),
@@ -67,32 +69,47 @@ class _BaseNosanaSensor(CoordinatorEntity, SensorEntity):
         # Use a human-friendly display name by title-casing the suffix (replace underscores with spaces)
         display_suffix = suffix.replace("_", " ").title()
         self._attr_name = f"{name} {display_suffix}"
-        # Keep the unique id stable by using the raw suffix form (lower/underscored)
+          # Keep the unique id stable by using the raw suffix form (lower/underscored)
         self._attr_unique_id = f"nosana_node_{node_address[:8]}_{suffix.replace(' ', '_').lower()}"
-        # Keep the device name (based on the config entry title) so device_info can use it
+          # Keep the device name (based on the config entry title) so device_info can use it
         self._device_name = name
 
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None
+    def _get_data(self):
+         """Get data from coordinator, handling both coordinator types."""
+        if self.coordinator is None:
+            return None
+        data = self.coordinator.data
+        if data is None:
+            return None
+         # Info coordinator returns raw info dict; main coordinator returns merged dict.
+        # We wrap info_coordinator data in a dict with an 'info' key so sensors don't need
+        # to change their lookup logic (e.g., data.get("info", {}).get("field")).
+        if isinstance(self.coordinator, NosanaInfoCoordinator):
+            return {"info": data}
+        return data
 
-    @property
+     @property
+    def available(self) -> bool:
+        return self._get_data() is not None
+
+     @property
     def device_info(self) -> dict:
-        """Return device information for device registry grouping.
+          """Return device information for device registry grouping.
 
         The device is identified by (DOMAIN, node_address) so multiple entities
         created for the same node are grouped under one device entry.
-        """
+         """
         info = {
-            "identifiers": {("nosana_node", self._node_address)},
-            "name": self._device_name,
-            "manufacturer": "Nosana",
-            "model": "Nosana Node",
-        }
-        # Add software version/model if coordinator has data
-        if self.coordinator.data:
-            model = self.coordinator.data.get("info", {}).get("model")
-            version = self.coordinator.data.get("info", {}).get("version")
+               "identifiers": {("nosana_node", self._node_address)},
+               "name": self._device_name,
+               "manufacturer": "Nosana",
+               "model": "Nosana Node",
+         }
+         # Add software version/model if coordinator has data
+        data = self._get_data()
+        if data:
+            model = data.get("info", {}).get("model")
+            version = data.get("info", {}).get("version")
             if model:
                 info["model"] = model
             if version:
@@ -114,11 +131,12 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "status")
         self._attr_icon = "mdi:server"
 
-    @property
+      @property
     def state(self) -> StateType:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        state = self.coordinator.data.get("state")
+        state = data.get("info", {}).get("state")
         if not isinstance(state, str) or not state.strip():
             return "Offline"
         s = state.strip().upper()
@@ -128,7 +146,7 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
             return "Queued"
         if s in {"RUNNING", "OTHER"}:
             return "Running"
-        # Fallback for any other unexpected value -> Offline
+         # Fallback for any other unexpected value -> Offline
         return "Offline"
 
     @property
@@ -152,25 +170,27 @@ class NosanaNodeVersionSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "version")
         self._attr_icon = "mdi:tag"
 
-    @property
+       @property
     def state(self) -> StateType:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("info", {}).get("version")
+        return data.get("info", {}).get("version")
 
 
 class NosanaNodeCountrySensor(_BaseNosanaSensor):
-    """Sensor for the node country."""
+       """Sensor for the node country."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "country")
         self._attr_icon = "mdi:map-marker"
 
-    @property
+       @property
     def state(self) -> StateType:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("info", {}).get("country")
+        return data.get("info", {}).get("country")
 
 
 class NosanaNodePingSensor(_BaseNosanaSensor):
@@ -182,15 +202,16 @@ class NosanaNodePingSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "ms"
 
-    @property
+        @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("ping_ms")
+        return data.get("specs", {}).get("ping_ms")
 
 
 class NosanaNodeDownloadSensor(_BaseNosanaSensor):
-    """Sensor for the network download speed in Mbps."""
+        """Sensor for the network download speed in Mbps."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "download_mbps")
@@ -198,15 +219,16 @@ class NosanaNodeDownloadSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "Mbps"
 
-    @property
+        @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("download_mbps")
+        return data.get("specs", {}).get("download_mbps")
 
 
 class NosanaNodeUploadSensor(_BaseNosanaSensor):
-    """Sensor for the network upload speed in Mbps."""
+        """Sensor for the network upload speed in Mbps."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "upload_mbps")
@@ -214,11 +236,12 @@ class NosanaNodeUploadSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "Mbps"
 
-    @property
+        @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("upload_mbps")
+        return data.get("specs", {}).get("upload_mbps")
 
 
 # network-related sensors removed
@@ -232,12 +255,13 @@ class NosanaNodeMarketSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "market")
         self._attr_icon = "mdi:store"
 
-    @property
+         @property
     def state(self) -> Optional[str]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
         # market_name is populated by the coordinator
-        return self.coordinator.data.get("market", {}).get("name")
+        return data.get("market", {}).get("name")
 
 
 class NosanaNodeMarketAddressSensor(_BaseNosanaSensor):
@@ -245,11 +269,12 @@ class NosanaNodeMarketAddressSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "market_address")
         self._attr_icon = "mdi:map-marker"
 
-    @property
+         @property
     def state(self) -> Optional[str]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("market", {}).get("address")
+        return data.get("market", {}).get("address")
 
 
 class NosanaNodeMarketTypeSensor(_BaseNosanaSensor):
@@ -257,11 +282,12 @@ class NosanaNodeMarketTypeSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "market_type")
         self._attr_icon = "mdi:shape"
 
-    @property
+         @property
     def state(self) -> Optional[str]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("market", {}).get("type")
+        return data.get("market", {}).get("type")
 
 
 class NosanaNodeMarketNosRewardSensor(_BaseNosanaSensor):
@@ -270,11 +296,12 @@ class NosanaNodeMarketNosRewardSensor(_BaseNosanaSensor):
         self._attr_icon = "mdi:currency-usd"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+         @property
     def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("market", {}).get("nos_reward_per_second")
+        return data.get("market", {}).get("nos_reward_per_second")
 
 
 class NosanaNodeMarketUsdRewardSensor(_BaseNosanaSensor):
@@ -284,11 +311,12 @@ class NosanaNodeMarketUsdRewardSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "USD/h"
 
-    @property
+         @property
     def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("market", {}).get("usd_reward_per_hour")
+        return data.get("market", {}).get("usd_reward_per_hour")
 
 
 class NosanaNodeRamSensor(_BaseNosanaSensor):
@@ -300,15 +328,16 @@ class NosanaNodeRamSensor(_BaseNosanaSensor):
         self._attr_icon = "mdi:memory"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+          @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("ram")
+        return data.get("specs", {}).get("ram")
 
 
 class NosanaNodeDiskSensor(_BaseNosanaSensor):
-    """Sensor for the node disk space in GB."""
+     """Sensor for the node disk space in GB."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "disk_space")
@@ -316,25 +345,27 @@ class NosanaNodeDiskSensor(_BaseNosanaSensor):
         self._attr_icon = "mdi:harddisk"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+          @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("diskSpace")
+        return data.get("specs", {}).get("diskSpace")
 
 
 class NosanaNodeCpuSensor(_BaseNosanaSensor):
-    """Sensor for the CPU model string."""
+     """Sensor for the CPU model string."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "cpu")
         self._attr_icon = "mdi:cpu-64-bit"
 
-    @property
+          @property
     def state(self) -> Optional[str]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("cpu")
+        return data.get("specs", {}).get("cpu")
 
 
 class NosanaNodeLogicalCoresSensor(_BaseNosanaSensor):
@@ -344,11 +375,12 @@ class NosanaNodeLogicalCoresSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "cores"
 
-    @property
+          @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("logicalCores")
+        return data.get("specs", {}).get("logicalCores")
 
 
 class NosanaNodePhysicalCoresSensor(_BaseNosanaSensor):
@@ -358,11 +390,12 @@ class NosanaNodePhysicalCoresSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = "cores"
 
-    @property
+          @property
     def state(self) -> Optional[int]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("physicalCores")
+        return data.get("specs", {}).get("physicalCores")
 
 
 class NosanaNodeGpuModelSensor(_BaseNosanaSensor):
@@ -370,11 +403,12 @@ class NosanaNodeGpuModelSensor(_BaseNosanaSensor):
         super().__init__(coordinator, name, node_address, "gpu_model")
         self._attr_icon = "mdi:gpu"
 
-    @property
+          @property
     def state(self) -> Optional[str]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        gpus = self.coordinator.data.get("specs", {}).get("gpus") or []
+        gpus = data.get("specs", {}).get("gpus") or []
         if not isinstance(gpus, list) or not gpus:
             return None
         first = gpus[0]
@@ -388,15 +422,16 @@ class NosanaNodeMemoryGpuSensor(_BaseNosanaSensor):
         self._attr_icon = "mdi:memory"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+          @property
     def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return self.coordinator.data.get("specs", {}).get("memoryGPU")
+        return data.get("specs", {}).get("memoryGPU")
 
 
 class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
-    """Total USD earned (aggregated from jobs via HA Store)."""
+     """Total USD earned (aggregated from jobs via HA Store)."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "earnings_usd_total")
@@ -404,18 +439,19 @@ class NosanaNodeEarningsUsdSensor(_BaseNosanaSensor):
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_native_unit_of_measurement = "USD"
 
-    @property
+          @property
     def state(self) -> Optional[float]:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return None
-        return (self.coordinator.data.get("earnings") or {}).get("usd_total")
+        return (data.get("earnings") or {}).get("usd_total")
 
 
 class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
-    """Latest LLM benchmark tokens/sec (mean) with model_id attribute.
+     """Latest LLM benchmark tokens/sec (mean) with model_id attribute.
 
     Keeps the last known value when new data is unavailable (e.g., job not finalized yet).
-    """
+      """
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "benchmark_tokens_per_second")
@@ -425,24 +461,24 @@ class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
         self._last_value: Optional[float] = None
         self._last_model_id: Optional[str] = None
 
-    @property
+          @property
     def state(self) -> Optional[float]:
-        data = self.coordinator.data or {}
+        data = self._get_data() or {}
         bench = (data.get("earnings") or {}).get("benchmark") or {}
         val = bench.get("tokens_per_second_mean")
         if isinstance(val, (int, float)):
             self._last_value = float(val)
-            # update cached model id if present
+              # update cached model id if present
             mid = bench.get("model_id")
             if isinstance(mid, str):
                 self._last_model_id = mid
             return self._last_value
-        # No new finalized benchmark → keep last known value
+          # No new finalized benchmark → keep last known value
         return self._last_value
 
-    @property
+          @property
     def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
+        data = self._get_data() or {}
         bench = (data.get("earnings") or {}).get("benchmark") or {}
         model_id = bench.get("model_id")
         if isinstance(model_id, str):
@@ -451,7 +487,7 @@ class NosanaNodeBenchmarkTokensPerSecondSensor(_BaseNosanaSensor):
 
 
 class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
-    """Job timeout in hours. 0 if the latest job is finished or missing."""
+     """Job timeout in hours. 0 if the latest job is finished or missing."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "job_timeout_hours")
@@ -459,23 +495,23 @@ class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
         self._attr_native_unit_of_measurement = "h"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+          @property
     def state(self) -> float:
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return 0.0
-        data = self.coordinator.data
         latest = (data.get("earnings") or {}).get("latest_job") or {}
         try:
             time_end = int(latest.get("timeEnd", 0) or 0)
             if time_end > 0:
                 return 0.0
 
-            # timeout may be stored in seconds (typical) or milliseconds in some APIs.
+              # timeout may be stored in seconds (typical) or milliseconds in some APIs.
             timeout_raw = int(latest.get("timeout", 0) or 0)
             if timeout_raw <= 0:
                 return 0.0
 
-            # Heuristic: if timeout looks like milliseconds (very large), convert to seconds
+              # Heuristic: if timeout looks like milliseconds (very large), convert to seconds
             if timeout_raw > 1_000_000_000:
                 timeout_seconds = timeout_raw / 1000.0
             else:
@@ -487,7 +523,7 @@ class NosanaNodeJobTimeoutHoursSensor(_BaseNosanaSensor):
 
 
 class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
-    """Time left (hours) for the latest running job. 0 if finished or no timeout."""
+     """Time left (hours) for the latest running job. 0 if finished or no timeout."""
 
     def __init__(self, coordinator: NosanaNodeCoordinator, name: str, node_address: str):
         super().__init__(coordinator, name, node_address, "job_time_left_hours")
@@ -495,12 +531,12 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
         self._attr_native_unit_of_measurement = "h"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    @property
+          @property
     def state(self) -> float:
         from datetime import datetime, timezone
-        if self.coordinator.data is None:
+        data = self._get_data()
+        if data is None:
             return 0.0
-        data = self.coordinator.data
         latest = (data.get("earnings") or {}).get("latest_job") or {}
         try:
             time_end = int(latest.get("timeEnd", 0) or 0)
@@ -512,13 +548,13 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
             if time_start_raw <= 0 or timeout_raw <= 0:
                 return 0.0
 
-            # Heuristic: detect if timeStart is in milliseconds
+              # Heuristic: detect if timeStart is in milliseconds
             if time_start_raw > 1_000_000_000_000:
                 time_start = int(time_start_raw / 1000)
             else:
                 time_start = time_start_raw
 
-            # timeout likely in seconds; if extremely large assume ms
+              # timeout likely in seconds; if extremely large assume ms
             if timeout_raw > 1_000_000_000:
                 timeout_seconds = timeout_raw / 1000.0
             else:
@@ -531,9 +567,9 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
         except Exception:
             return 0.0
 
-    @property
+          @property
     def extra_state_attributes(self) -> dict:
-        # Expose the raw latest_job for debugging convenience
-        data = self.coordinator.data or {}
+          # Expose the raw latest_job for debugging convenience
+        data = self._get_data() or {}
         latest = (data.get("earnings") or {}).get("latest_job")
         return {"latest_job": latest} if isinstance(latest, dict) else {}

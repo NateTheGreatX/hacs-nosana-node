@@ -5,22 +5,24 @@ from homeassistant.core import HomeAssistant
 from homeassistant.const import Platform
 
 from .const import DOMAIN
-from .coordinator import NosanaNodeCoordinator
+from .coordinator import NosanaNodeCoordinator, NosanaInfoCoordinator
 
 PLATFORMS = [Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Nosana Node from a config entry."""
+     """Set up Nosana Node from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     node_address = entry.data["node_address"]
-    coordinator = NosanaNodeCoordinator(hass, node_address)
+    info_coordinator = NosanaInfoCoordinator(hass, node_address)
+    coordinator = NosanaNodeCoordinator(hass, node_address, info_coordinator)
 
-    # Fetch initial data
+     # Fetch initial data
+    await info_coordinator.async_config_entry_first_refresh()
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    hass.data[DOMAIN][entry.entry_id] = {"coordinator": coordinator, "info_coordinator": info_coordinator}
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
