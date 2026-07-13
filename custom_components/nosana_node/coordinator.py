@@ -105,58 +105,13 @@ def _get_queue_position_from_market_raw(market_raw: bytes, node_addr_b58: str) -
     return None
 
 
-class NosanaInfoCoordinator(DataUpdateCoordinator):
-    """Class to manage frequent info updates."""
+class NosanaNodeCoordinator(DataUpdateCoordinator):
+    """Class to manage fetching Nosana node data."""
 
     def __init__(self, hass, node_address: str):
-        self.node_address = node_address
-        self.info_url = f"https://{node_address}.node.k8s.prd.nos.ci/node/info"
-        self._session = async_get_clientsession(hass)
-        super().__init__(
-            hass,
-            _LOGGER,
-            name="Nosana Info",
-            update_interval=timedelta(seconds=5),
-        )
-
-    async def _async_update_data(self):
-        """Fetch the per-node info endpoint."""
-        try:
-            async with async_timeout.timeout(10):
-                resp_info = await self._session.get(self.info_url)
-                if resp_info.status == 200:
-                    info = await resp_info.json()
-                    normalized_status = "Running"
-                    raw_state = info.get("state") or info.get("status") or info.get("nodeStatus")
-                    if isinstance(raw_state, str):
-                        s = raw_state.upper()
-                        if s == "QUEUED":
-                            normalized_status = "Queued"
-                        elif s in ("OFFLINE", "STOPPED", "ERROR"):
-                            normalized_status = "Offline"
-                        else:
-                            normalized_status = "Running"
-                    else:
-                        normalized_status = "Running"
-                    
-                    info["status"] = normalized_status
-                    info["nodeStatus"] = normalized_status
-                    info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
-                    return info
-                else:
-                    return {}
-        except Exception as e:
-            _LOGGER.error("Error fetching info from %s: %s", self.info_url, e)
-            return {}
-
-# --- Existing Classes ---
-
-class NosanaNodeCoordinator(DataUpdateCoordinator):
-
-    def __init__(self, hass, node_address: str, info_coordinator: NosanaInfoCoordinator):
         """Initialize the coordinator."""
         self.node_address = node_address
-        self.info_coordinator = info_coordinator
+        self.info_url = f"https://{node_address}.node.k8s.prd.nos.ci/node/info"
         # /specs endpoint removed; use /metrics as the authoritative dashboard source
         self.metrics_url = f"https://dashboard.k8s.prd.nos.ci/api/nodes/{node_address}/metrics"
         self.markets_url = "https://dashboard.k8s.prd.nos.ci/api/markets"
@@ -165,6 +120,11 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self._session = async_get_clientsession(hass)
         # HA Store for per-node job accounting
         self._store = Store(hass, 1, f"nosana_node/node-{node_address}.jobs.json")
+
+        # metrics cache (avoid fetching the heavy /metrics endpoint every 5s cycle)
+        self._metrics_cache: Optional[dict] = None
+        self._metrics_last_fetch: Optional[datetime] = None
+        self._metrics_ttl_seconds = 30
 
         # markets cache (avoid fetching the markets list every update)
         self._markets_cache: Optional[list] = None
@@ -180,7 +140,9 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="Nosana Node",
-            update_interval=timedelta(seconds=30),
+            # Poll every 5s so the node status/info stays fresh; heavier data
+            # (metrics/markets/jobs) is throttled internally via TTL caches below.
+            update_interval=timedelta(seconds=5),
         )
 
     async def _async_update_data(self):
@@ -191,24 +153,65 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """
         try:
             async with async_timeout.timeout(15):
-                # Pull info from the separate fast-polling coordinator
-                info = self.info_coordinator.data or {}
-                normalized_status = info.get("status", "Offline")
-                raw_state = info.get("state")
+                # Fetch the node info (graceful fallback to Offline). This runs every
+                # cycle (5s) so status/version/country stay fresh.
+                info: dict = {}
+                try:
+                    resp_info = await self._session.get(self.info_url)
+                    if resp_info.status == 200:
+                        info = await resp_info.json()
+                    else:
+                        _LOGGER.warning(
+                            "Failed to fetch node info from %s, status: %s",
+                            self.info_url,
+                            getattr(resp_info, "status", None),
+                        )
+                        info = {}
+                except Exception as e:
+                    _LOGGER.warning("Error fetching node info from %s: %s", self.info_url, e)
+                    info = {}
+
+                normalized_status = "Running"
+                raw_state = info.get("state") or info.get("status") or info.get("nodeStatus")
+                if isinstance(raw_state, str):
+                    s = raw_state.upper()
+                    if s == "QUEUED":
+                        normalized_status = "Queued"
+                    elif s in ("OFFLINE", "STOPPED", "ERROR"):
+                        normalized_status = "Offline"
+                    else:
+                        normalized_status = "Running"
+                elif not info:
+                    normalized_status = "Offline"
+                info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
+
                 status_changed = self._last_status != normalized_status
                 self._last_status = normalized_status
 
-                # Fetch metrics (dashboard) and normalize into 'specs' shape expected by sensors
-                try:
-                    resp_metrics = await self._session.get(self.metrics_url)
-                    if resp_metrics.status != 200:
-                        _LOGGER.warning("Failed to fetch metrics from %s, status: %s", self.metrics_url, getattr(resp_metrics, "status", None))
-                        raw_metrics = {}
-                    else:
-                        raw_metrics = await resp_metrics.json()
-                except Exception:
-                    _LOGGER.warning("Error fetching metrics from %s", self.metrics_url)
-                    raw_metrics = {}
+                # Fetch metrics (dashboard), throttled via TTL cache since this endpoint
+                # is heavier and doesn't need to be polled every 5s.
+                now_metrics = datetime.utcnow()
+                should_refetch_metrics = True
+                if self._metrics_cache is not None and self._metrics_last_fetch is not None:
+                    elapsed_metrics = (now_metrics - self._metrics_last_fetch).total_seconds()
+                    if elapsed_metrics < self._metrics_ttl_seconds:
+                        should_refetch_metrics = False
+
+                if should_refetch_metrics:
+                    try:
+                        resp_metrics = await self._session.get(self.metrics_url)
+                        if resp_metrics.status != 200:
+                            _LOGGER.warning("Failed to fetch metrics from %s, status: %s", self.metrics_url, getattr(resp_metrics, "status", None))
+                            raw_metrics = {}
+                        else:
+                            raw_metrics = await resp_metrics.json()
+                        self._metrics_cache = raw_metrics
+                        self._metrics_last_fetch = now_metrics
+                    except Exception:
+                        _LOGGER.warning("Error fetching metrics from %s", self.metrics_url)
+                        raw_metrics = self._metrics_cache or {}
+                else:
+                    raw_metrics = self._metrics_cache or {}
 
                 # normalization: produce a specs dict compatible with existing sensors
                 specs: Dict[str, Any] = {}
