@@ -126,7 +126,7 @@ class NosanaNodeStatusSensor(_BaseNosanaSensor):
             return "Offline"
         if s == "QUEUED":
             return "Queued"
-        if s in {"RUNNING", "OTHER"}:
+        if s in {"RUNNING", "RUNNING_JOB", "OTHER", "STARTING"}:
             return "Running"
         # Fallback for any other unexpected value -> Offline
         return "Offline"

@@ -136,14 +136,51 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self._jobs_ttl_seconds = 15 * 60  # 15 minutes
         self._last_status: Optional[str] = None
 
+        # Info endpoint polling: happy path polls every 1s; on failure, progressively
+        # back off (5s -> 10s -> 20s -> 40s -> ... capped at 60s) to avoid log spam/rate limits.
+        self.info_poll_interval_seconds = 1.0
+        self._info_consecutive_failures = 0
+        self._info_max_backoff_seconds = 60.0
+
         super().__init__(
             hass,
             _LOGGER,
             name="Nosana Node",
-            # Poll every 5s so the node status/info stays fresh; heavier data
+            # Poll frequently so the node status/info stays fresh; heavier data
             # (metrics/markets/jobs) is throttled internally via TTL caches below.
-            update_interval=timedelta(seconds=5),
+            update_interval=timedelta(seconds=1),
         )
+
+    def _apply_info_interval(self) -> None:
+        """Apply the current info poll interval to the coordinator."""
+        interval = timedelta(seconds=self.info_poll_interval_seconds)
+        self.update_interval = interval
+        try:
+            # Supported way to dynamically reschedule the coordinator's polling task.
+            self.async_set_updated_interval(interval)
+        except Exception:
+            # Coordinator may not be started yet; the attribute is picked up on start.
+            self.update_interval = interval
+
+    def _handle_info_success(self) -> None:
+        """Reset info backoff and poll at the happy-path interval."""
+        self._info_consecutive_failures = 0
+        self.info_poll_interval_seconds = 1.0
+        self._apply_info_interval()
+
+    def _handle_info_failure(self) -> None:
+        """Progressive backoff for info endpoint failures (5s -> ... capped at 60s)."""
+        self._info_consecutive_failures += 1
+        if self._info_consecutive_failures == 1:
+            # First failure falls back to 5s polling.
+            self.info_poll_interval_seconds = 5.0
+        else:
+            # Progressive escalation: 5 -> 10 -> 20 -> 40 -> ... capped at 60s.
+            self.info_poll_interval_seconds = min(
+                self._info_max_backoff_seconds,
+                self.info_poll_interval_seconds * 2,
+            )
+        self._apply_info_interval()
 
     async def _async_update_data(self):
         """Fetch data from Nosana API and related endpoints.
@@ -153,13 +190,16 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         """
         try:
             async with async_timeout.timeout(15):
-                # Fetch the node info (graceful fallback to Offline). This runs every
-                # cycle (5s) so status/version/country stay fresh.
+                # Fetch the node info (graceful fallback to Offline). Happy path polls
+                # at 1s; on failure the coordinator backs off progressively (see
+                # _handle_info_failure).
                 info: dict = {}
+                info_fetch_ok = False
                 try:
                     resp_info = await self._session.get(self.info_url)
                     if resp_info.status == 200:
                         info = await resp_info.json()
+                        info_fetch_ok = True
                     else:
                         _LOGGER.warning(
                             "Failed to fetch node info from %s, status: %s",
@@ -170,20 +210,51 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                 except Exception as e:
                     _LOGGER.warning("Error fetching node info from %s: %s", self.info_url, e)
                     info = {}
+                if info_fetch_ok:
+                    self._handle_info_success()
+                else:
+                    self._handle_info_failure()
 
                 normalized_status = "Running"
-                raw_state = info.get("state") or info.get("status") or info.get("nodeStatus")
-                if isinstance(raw_state, str):
-                    s = raw_state.upper()
+                # Support both the legacy flat payload and the newer nested dashboard
+                # payload shape, e.g.
+                # {
+                #   "node": "...",
+                #   "uptime": "...",
+                #   "state": "RUNNING_JOB",
+                #   "info": { "version": ..., "country": ... },
+                #   "resources": { ... },
+                # }
+                inner_info = info.get("info") if isinstance(info.get("info"), dict) else {}
+                raw_state = (
+                    info.get("state")
+                    or info.get("status")
+                    or info.get("nodeStatus")
+                    or inner_info.get("state")
+                )
+                if isinstance(raw_state, str) and raw_state.strip():
+                    s = raw_state.strip().upper()
                     if s == "QUEUED":
                         normalized_status = "Queued"
                     elif s in ("OFFLINE", "STOPPED", "ERROR"):
                         normalized_status = "Offline"
                     else:
+                        # RUNNING / RUNNING_JOB / OTHER -> Running
                         normalized_status = "Running"
                 elif not info:
                     normalized_status = "Offline"
-                info["state"] = raw_state if isinstance(raw_state, str) else normalized_status
+                info["state"] = normalized_status
+                info["status"] = normalized_status
+                info["nodeStatus"] = normalized_status
+
+                # Flatten nested "info" fields (newer dashboard payload shape) to
+                # top-level keys so version/country/system_environment sensors keep working.
+                if isinstance(info, dict) and isinstance(info.get("info"), dict):
+                    nested_info = info.get("info") or {}
+                    for key in ("version", "country", "system_environment", "protocol"):
+                        val = nested_info.get(key)
+                        if val and not info.get(key):
+                            info[key] = val
 
                 status_changed = self._last_status != normalized_status
                 self._last_status = normalized_status

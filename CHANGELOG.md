@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15
+- Bug fix: support the new nested dashboard `/node/info` payload shape (`{"state": "RUNNING_JOB", "info": {...}}`).
+  - Running nodes with `state: "RUNNING_JOB"` now correctly report `Running` (previously fell through to `Offline`).
+  - Status reads now fall back to nested `info.state` when top-level state is absent.
+  - Nested `info` fields (`version`, `country`, `system_environment`, `protocol`) are flattened to top level for sensors.
+- Coordinator info polling now runs at **1s** on success and progressive backoff (**5s → 10s → 20s → 40s → capped at 60s**) on failure, resetting to 1s on recovery.
+
 ## 0.1.13
 - Throttle jobs API via TTL: fetch at most every 15 minutes, similar to markets TTL logic, and recompute totals from Store between fetches.
 - Fetch jobs immediately when node status changes (Offline/Queued/Running), to keep earnings up to date without hitting rate limits.
