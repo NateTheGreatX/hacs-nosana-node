@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_NODE_ADDRESS
+from .const import DOMAIN, CONF_NODE_ADDRESS, DEFAULT_GENERAL_DEPLOYMENTS
 from .coordinator import NosanaNodeCoordinator
 
 
@@ -52,6 +52,7 @@ async def async_setup_entry(
         NosanaNodeBenchmarkTokensPerSecondSensor(coordinator, entry.title, node_address),
         NosanaNodeJobTimeoutHoursSensor(coordinator, entry.title, node_address),
         NosanaNodeJobTimeLeftHoursSensor(coordinator, entry.title, node_address),
+        NosanaNodeJobTypeSensor(coordinator, entry.title, node_address),
     ]
 
     async_add_entities(sensors)
@@ -555,3 +556,59 @@ class NosanaNodeJobTimeLeftHoursSensor(_BaseNosanaSensor):
         data = self.coordinator.data or {}
         latest = (data.get("earnings") or {}).get("latest_job")
         return {"latest_job": latest} if isinstance(latest, dict) else {}
+
+
+class NosanaNodeJobTypeSensor(_BaseNosanaSensor):
+    """Job type for the currently running job (deployer-based).
+
+    - If the node is running a job whose deployer (project) is in the
+      general_deployments list, the state is "General".
+    - If the node is running a job that belongs to any other deployer, the
+      state is "Deployment Manager".
+    - If the node is idle, queued, or the job is finished, the state is "Idle".
+    """
+
+    def __init__(self, coordinator, name: str, node_address: str):
+        super().__init__(coordinator, name, node_address, "job_type")
+        self._attr_icon = "mdi:rocket-launch"
+
+    @property
+    def state(self) -> Optional[str]:
+        data = self.coordinator.data
+        if data is None:
+            return "Idle"
+        latest = (data.get("earnings") or {}).get("latest_job") or {}
+        try:
+            time_end = int(latest.get("timeEnd", 0) or 0)
+            time_start = int(latest.get("timeStart", 0) or 0)
+        except Exception:
+            return "Idle"
+
+        # Only report a job type when the node is actually running a job.
+        # A finished job (timeEnd > 0) or a queued job should report "Idle".
+        status = data.get("state")
+        running_statuses = {"RUNNING", "RUNNING_JOB", "OTHER", "STARTING"}
+        is_running = isinstance(status, str) and status.strip().upper() in running_statuses
+        if not is_running or time_end > 0 or time_start <= 0:
+            return "Idle"
+
+        deployer = latest.get("project")
+        if isinstance(deployer, str) and deployer.strip() in DEFAULT_GENERAL_DEPLOYMENTS:
+            return "General"
+
+        # Any other deployer → Deployment Manager
+        return "Deployment Manager"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        latest = (data.get("earnings") or {}).get("latest_job") or {}
+        attributes: dict = {}
+        if isinstance(latest, dict):
+            attributes["job_id"] = latest.get("id")
+            attributes["deployer"] = latest.get("project")
+            attributes["job_type_raw"] = latest.get("type")
+            attributes["job_status"] = latest.get("jobStatus")
+            attributes["time_start"] = latest.get("timeStart")
+            attributes["time_end"] = latest.get("timeEnd")
+        return attributes

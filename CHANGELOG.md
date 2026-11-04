@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.17
+- Fix: resolve `UnboundLocalError` in coordinator follow-up jobs refresh by using `datetime.utcnow()` directly instead of the local variable `now` which was not yet assigned when the status-change scheduling block runs.
+
+## 0.1.16
+- Add job type sensor for the currently running job (deployer-based):
+  - New sensor `NosanaNodeJobTypeSensor` (`sensor.nosana_node_<node>_job_type`) reports the job type of the running job.
+  - If the running job's deployer (`project`) is in the general deployments list, the state is `"General"`.
+  - If the running job belongs to any other deployer, the state is `"Deployment Manager"`.
+  - If the node is idle, queued, or the job is finished, the state is `"Idle"`.
+- Expose `project`, `type`, `jobStatus`, and `state` on the coordinator's `latest_job` payload so sensors can determine job type.
+- Persist `project` and `type` on stored job records (for fallback/latest-job computations from the HA Store).
+- Add configurable `general_deployments` list (defaults to `["JBksZBRkyjPYnqmnxheMr4t1WP88gAwGX6SUz3HuPkfT"]`) in `const.py`.
+- Schedule a follow-up jobs API refresh ~60s after a `Queued -> Running` status transition to pick up newly started jobs.
+
 ## 0.1.15
 - Bug fix: support the new nested dashboard `/node/info` payload shape (`{"state": "RUNNING_JOB", "info": {...}}`).
   - Running nodes with `state: "RUNNING_JOB"` now correctly report `Running` (previously fell through to `Offline`).

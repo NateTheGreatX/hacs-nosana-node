@@ -135,6 +135,9 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
         self._jobs_last_fetch: Optional[datetime] = None
         self._jobs_ttl_seconds = 15 * 60  # 15 minutes
         self._last_status: Optional[str] = None
+        # Timestamp (UTC) for a follow-up jobs refresh scheduled after a
+        # Queued -> Running status transition (job may not be visible yet).
+        self._jobs_followup_refresh_at: Optional[datetime] = None
 
         # Info endpoint polling: happy path polls every 1s; on failure, progressively
         # back off (5s -> 10s -> 20s -> 40s -> ... capped at 60s) to avoid log spam/rate limits.
@@ -258,6 +261,15 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
 
                 status_changed = self._last_status != normalized_status
                 self._last_status = normalized_status
+
+                # If the node just transitioned into a Running state, schedule a
+                # follow-up jobs fetch ~60s later (the jobs API may take a moment to
+                # reflect a newly started job).
+                if status_changed:
+                    if normalized_status == "Running":
+                        self._jobs_followup_refresh_at = datetime.utcnow() + timedelta(seconds=60)
+                    else:
+                        self._jobs_followup_refresh_at = None
 
                 # Fetch metrics (dashboard), throttled via TTL cache since this endpoint
                 # is heavier and doesn't need to be polled every 5s.
@@ -432,10 +444,15 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         if market.get("name"):
                             break
 
-                # Jobs fetch: TTL (15 min) or immediate on status change
+                # Jobs fetch: TTL (15 min), immediate on status change, or after a
+                # scheduled follow-up refresh (e.g. after a Queued -> Running transition).
                 should_fetch_jobs = False
                 if status_changed:
                     should_fetch_jobs = True
+                elif self._jobs_followup_refresh_at is not None and now >= self._jobs_followup_refresh_at:
+                    # Follow-up refresh window elapsed; fire the refresh and clear the flag.
+                    should_fetch_jobs = True
+                    self._jobs_followup_refresh_at = None
                 else:
                     if self._jobs_last_fetch is None:
                         should_fetch_jobs = True
@@ -486,6 +503,11 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                                 "timeStart": int(chosen.get("timeStart", 0) or 0),
                                 "timeEnd": int(chosen.get("timeEnd", 0) or 0),
                                 "timeout": int(chosen.get("timeout", 0) or 0),
+                                # Expose job-level context for downstream sensors (e.g. job type)
+                                "state": chosen.get("state"),
+                                "type": chosen.get("type"),
+                                "jobStatus": chosen.get("jobStatus"),
+                                "project": chosen.get("project"),
                             }
                     except Exception:
                         # leave earnings as-is if anything goes wrong
@@ -633,6 +655,9 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                     "state": job.get("state"),
                     "finalized": bool(finalized),
                     "last_seen": datetime.now(timezone.utc).isoformat(),
+                    # Persist deployer/job-type context for downstream sensors (job type)
+                    "project": job.get("project"),
+                    "type": job.get("type"),
                 }
                 _LOGGER.debug("Storing new job %s timeout=%s", jid, new_record.get("timeout"))
                 if bench:
@@ -665,6 +690,8 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         "finalized": True,
                         "usdRewardPerHour": float(job.get("usdRewardPerHour", 0.0) or 0.0),
                         "last_seen": datetime.now(timezone.utc).isoformat(),
+                        "project": job.get("project"),
+                        "type": job.get("type"),
                     })
                     if bench:
                         prev["benchmark"] = bench
@@ -771,6 +798,11 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         "timeStart": int(chosen.get("timeStart", 0) or 0),
                         "timeEnd": int(chosen.get("timeEnd", 0) or 0),
                         "timeout": int(timeout_val or 0),
+                        # Expose job-level context for downstream sensors (e.g. job type)
+                        "state": chosen.get("state"),
+                        "type": chosen.get("type"),
+                        "jobStatus": chosen.get("jobStatus"),
+                        "project": chosen.get("project"),
                     }
 
             # Fallback to persisted store if no fresh jobs present or chosen is empty
@@ -799,6 +831,10 @@ class NosanaNodeCoordinator(DataUpdateCoordinator):
                         "timeStart": int(chosen.get("timeStart", 0) or 0),
                         "timeEnd": int(chosen.get("timeEnd", 0) or 0),
                         "timeout": int(chosen.get("timeout", 0) or 0),
+                        "state": chosen.get("state"),
+                        "type": chosen.get("type"),
+                        "jobStatus": chosen.get("jobStatus"),
+                        "project": chosen.get("project"),
                     }
         except Exception:
             latest_job_out = {}

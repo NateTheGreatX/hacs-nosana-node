@@ -23,6 +23,15 @@ Version: 0.1.14
   - Optional local: copy the file to `config/www/nosana_node/logomark.svg` and use `/local/nosana_node/logomark.svg` if you prefer managing it yourself.
 - Coordinator uses Home Assistant's shared HTTP session and updates every 30 seconds for info/specs/markets. Jobs API is throttled with a 15-minute TTL and also fetched immediately on status changes to avoid rate limits while keeping earnings/benchmarks fresh.
 
+## Job type sensor
+- The coordinator fetches the most recent jobs for the node and exposes the latest running job.
+- The new job type sensor (`sensor.nosana_node_<node>_job_type`) reports:
+  - `"General"` if the running job's deployer (`project`) is in the general deployments list.
+  - `"Deployment Manager"` if the running job belongs to any other deployer.
+  - `"Idle"` if no job is currently running.
+
+The list of general deployments is defined in `custom_components/nosana_node/const.py` under `DEFAULT_GENERAL_DEPLOYMENTS` (currently `["JBksZBRkyjPYnqmnxheMr4t1WP88gAwGX6SUz3HuPkfT"]`). Add additional deployer addresses there as needed.
+
 ## Earnings aggregation (jobs API)
 - The coordinator queries `https://dashboard.k8s.prd.nos.ci/api/jobs?limit=10&offset=0&node=<node>` and maintains a per-node store under Home Assistant Storage: `storage/nosana_node/node-<address>.jobs.json`.
 - Only finalized jobs (`timeEnd > 0`) are counted toward totals.
